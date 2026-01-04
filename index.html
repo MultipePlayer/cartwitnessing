@@ -14,6 +14,9 @@
     
     <!-- Babel -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    
+    <!-- html2canvas (이미지 저장용) -->
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
 
     <style>
         /* Modern & Accessible Font Stack */
@@ -48,12 +51,23 @@
             font-size: 16px; /* Prevents zoom on mobile */
             color: #111827;
             transition: all 0.2s;
+            appearance: none; /* Removes default styling for select */
+            background-image: none;
         }
         .modern-input:focus {
             background-color: white;
             border-color: #4F46E5;
             outline: none;
             box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+        
+        /* Select arrow fix */
+        select.modern-input {
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+            background-position: right 0.5rem center;
+            background-repeat: no-repeat;
+            background-size: 1.5em 1.5em;
+            padding-right: 2.5rem;
         }
 
         /* Accessible Buttons */
@@ -68,13 +82,33 @@
             font-size: 15px;
         }
         .modern-btn:active { transform: scale(0.98); }
+        
+        /* Table enhancements */
+        .sticky-col-header {
+            position: sticky;
+            left: 0;
+            background-color: #F9FAFB;
+            z-index: 20;
+        }
+        .sticky-col-cell {
+            position: sticky;
+            left: 0;
+            background-color: white;
+            z-index: 10;
+        }
+        
+        /* Column Separator for readability */
+        .col-separator {
+            border-right-width: 2px;
+            border-right-color: #E5E7EB; /* tailwind gray-200 */
+        }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useRef, useMemo } = React;
 
         // --- 아이콘 컴포넌트 ---
         const IconBase = ({ children, ...props }) => (
@@ -102,13 +136,16 @@
             Share2: (props) => <IconBase {...props}><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></IconBase>,
             Copy: (props) => <IconBase {...props}><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></IconBase>,
             Calculator: (props) => <IconBase {...props}><rect width="16" height="20" x="4" y="2" rx="2"/><line x1="8" x2="16" y1="6" y2="6"/><line x1="16" x2="16" y1="14" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/></IconBase>,
-            Lock: (props) => <IconBase {...props}><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></IconBase>
+            Lock: (props) => <IconBase {...props}><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></IconBase>,
+            AlertTriangle: (props) => <IconBase {...props}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></IconBase>,
+            ImageDown: (props) => <IconBase {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></IconBase>,
+            TrashAll: (props) => <IconBase {...props}><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></IconBase>
         };
 
         const { 
             Settings, MapPin, Clock, Phone, Shuffle, Users, Plus, Trash2, 
             Save, X, CheckCircle2, Circle, AlertCircle, LinkIcon, Share2, Copy, 
-            Calculator, Lock, Rotate 
+            Calculator, Lock, Rotate, AlertTriangle, ImageDown, TrashAll
         } = Icons;
 
 
@@ -118,6 +155,12 @@
             if (!time) return 0;
             const [h, m] = time.split(':').map(Number);
             return h * 60 + m;
+        };
+
+        const getEndTimeMinutes = (time) => {
+            if (!time) return 0;
+            const mins = timeToMinutes(time);
+            return (mins === 0 && time === '00:00') ? 24 * 60 : mins;
         };
 
         const minutesToTime = (minutes) => {
@@ -130,7 +173,7 @@
         const generateTimeSlots = (start, end, interval) => {
             const slots = [];
             let current = timeToMinutes(start);
-            const endTime = timeToMinutes(end);
+            const endTime = getEndTimeMinutes(end);
 
             while (current < endTime) {
                 slots.push(minutesToTime(current));
@@ -149,18 +192,70 @@
             return array;
         };
         
-        // [Fixed] 클릭 영역을 넓힌 Accessible Toggle Switch
+        // [New] 10분 단위 시간 생성 유틸 (전체)
+        const generateAllTimeOptions = () => {
+            const options = [];
+            for (let h = 0; h < 24; h++) {
+                for (let m = 0; m < 60; m += 10) {
+                    const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                    options.push(timeStr);
+                }
+            }
+            options.push("00:00");
+            return options;
+        };
+
+        // [New] 범위 내 시간 생성 유틸
+        const generateRestrictedTimeOptions = (startStr, endStr) => {
+            const options = [];
+            const startMins = timeToMinutes(startStr);
+            const endMins = getEndTimeMinutes(endStr);
+            
+            // 24시간 전체 루프
+            for (let h = 0; h < 24; h++) {
+                for (let m = 0; m < 60; m += 10) {
+                    const currentMins = h * 60 + m;
+                    // 종료 시간이 다음날(예: 00:00 = 1440)인 경우 등을 고려
+                    // 단순화를 위해 start <= current <= end (자정 넘는 근무는 추후 고려, 현재는 단순 비교)
+                    if (currentMins >= startMins && currentMins <= endMins) {
+                        const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                        options.push(timeStr);
+                    }
+                }
+            }
+            // 자정 포함 여부
+            if (endMins >= 24 * 60) options.push("00:00");
+            
+            return options;
+        };
+
+        const allTimeOptions = generateAllTimeOptions();
+
+        // [Updated] TimeSelect: options를 props로 받거나 기본값 사용
+        const TimeSelect = ({ value, onChange, className, options }) => (
+            <select value={value} onChange={onChange} className={className}>
+                {(options || allTimeOptions).map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                ))}
+            </select>
+        );
+        
+        // [Fixed] Toggle Switch
         const ToggleSwitch = ({ checked, onChange, id }) => (
-            <label htmlFor={id} className="relative inline-flex items-center cursor-pointer p-1">
+            <div className="relative inline-block w-[52px] h-[32px] align-middle select-none transition duration-200 ease-in">
                 <input 
                     type="checkbox" 
                     id={id} 
-                    className="sr-only peer" 
+                    className="toggle-checkbox absolute block w-7 h-7 rounded-full bg-white border-4 appearance-none cursor-pointer peer checked:right-0 right-[20px] top-[2px] z-10 transition-all duration-200"
                     checked={checked} 
                     onChange={onChange} 
+                    style={{ right: checked ? '2px' : 'calc(100% - 30px)' }}
                 />
-                <div className="w-[52px] h-[32px] bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-100 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-[28px] after:w-[28px] after:transition-all peer-checked:bg-green-500 shadow-inner"></div>
-            </label>
+                <label 
+                    htmlFor={id} 
+                    className={`toggle-label block overflow-hidden h-8 rounded-full cursor-pointer border border-gray-200 transition-colors duration-200 ${checked ? 'bg-green-500' : 'bg-gray-200'}`}
+                ></label>
+            </div>
         );
 
 
@@ -168,8 +263,8 @@
         function ShiftScheduler() {
             // 1. 설정 상태
             const [config, setConfig] = useState({
-                startTime: '09:00',
-                endTime: '18:00',
+                startTime: '10:00', 
+                endTime: '12:00',   // [Fixed] Default End Time
                 interval: 15, 
                 peoplePerShift: 2,
                 locationCount: 1, 
@@ -177,39 +272,41 @@
                 genderRule: 'mixed', 
             });
 
-            // 2. 관리자 정보
             const [manager, setManager] = useState({
                 name: '',
                 phone: '',
             });
 
-            // 3. 장소 목록
             const [locations, setLocations] = useState(['정문']);
 
-            // 4. 참여자 목록
             const [participants, setParticipants] = useState([
-                { id: 1, name: '김철수', gender: 'M', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 2, name: '이영희', gender: 'F', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 3, name: '박민수', gender: 'M', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 4, name: '최지우', gender: 'F', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 5, name: '정우성', gender: 'M', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 6, name: '한지민', gender: 'F', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 7, name: '오지호', gender: 'M', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 8, name: '신민아', gender: 'F', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 9, name: '강동원', gender: 'M', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 1, name: '김철수', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 2, name: '이영희', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 3, name: '박민수', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 4, name: '최지우', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 5, name: '정우성', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 6, name: '한지민', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 7, name: '오지호', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 8, name: '신민아', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 9, name: '강동원', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
             ]);
 
-            // 5. 스케줄 데이터
             const [schedule, setSchedule] = useState({});
-
-            // 6. UI 상태
             const [isSetupOpen, setIsSetupOpen] = useState(true);
             const [activeTab, setActiveTab] = useState('basic'); 
             const [genderTab, setGenderTab] = useState('M'); 
             const [newNameInput, setNewNameInput] = useState(''); 
-            
             const [rotationStep, setRotationStep] = useState(0);
             const [shuffleCount, setShuffleCount] = useState(0); 
+            const [alertData, setAlertData] = useState({ isOpen: false, missing: [], suggestion: "" });
+            
+            // Ref for capturing
+            const scheduleRef = useRef(null);
+
+            // [New] Dynamic Time Options based on config
+            const restrictedTimeOptions = useMemo(() => {
+                return generateRestrictedTimeOptions(config.startTime, config.endTime);
+            }, [config.startTime, config.endTime]);
 
             // --- 로직 ---
 
@@ -249,9 +346,7 @@
                         }
                         return 999; 
                     };
-                    const locA = getLocIndex(a);
-                    const locB = getLocIndex(b);
-                    return locA - locB;
+                    return getLocIndex(a) - getLocIndex(b);
                 });
 
                 if (genderRule === 'separate') {
@@ -264,17 +359,21 @@
                     let fIdx = 0;
                     
                     while (mIdx < maleUnits.length || fIdx < femaleUnits.length) {
-                        let count = 0;
-                        while (mIdx < maleUnits.length && count < peoplePerShift) {
-                            interleaved.push(maleUnits[mIdx]);
-                            count += maleUnits[mIdx].length;
-                            mIdx++;
+                        if (mIdx < maleUnits.length) {
+                            let count = 0;
+                            while (mIdx < maleUnits.length && count < peoplePerShift) {
+                                interleaved.push(maleUnits[mIdx]);
+                                count += maleUnits[mIdx].length;
+                                mIdx++;
+                            }
                         }
-                        count = 0;
-                        while (fIdx < femaleUnits.length && count < peoplePerShift) {
-                            interleaved.push(femaleUnits[fIdx]);
-                            count += femaleUnits[fIdx].length;
-                            fIdx++;
+                        if (fIdx < femaleUnits.length) {
+                            let count = 0;
+                            while (fIdx < femaleUnits.length && count < peoplePerShift) {
+                                interleaved.push(femaleUnits[fIdx]);
+                                count += femaleUnits[fIdx].length;
+                                fIdx++;
+                            }
                         }
                     }
                     return interleaved.flat();
@@ -348,16 +447,21 @@
                 }
 
                 let teamIndex = 0; 
+                const assignedPersonIds = new Set();
 
-                timeSlots.forEach((time) => {
+                timeSlots.forEach((time, tIdx) => {
                     newSchedule[time] = {};
                     const currentSlotMinutes = timeToMinutes(time);
                     const nextSlotMinutes = currentSlotMinutes + parseInt(config.interval);
 
-                    const currentAssignments = []; // { locIndex: number, members: [] }
+                    const currentAssignments = []; 
                     locations.forEach((_, idx) => currentAssignments.push({ locIndex: idx, members: [] }));
                     
-                    const floaters = []; // 자투리 인원
+                    const floaters = [];
+
+                    if (config.genderRule === 'separate' && locations.length > 1) {
+                        if (tIdx % 2 !== 0) teamIndex++; 
+                    }
 
                     // 1. 완전한 팀 우선 배정
                     for (let i = 0; i < locations.length; i++) {
@@ -367,8 +471,13 @@
                             
                             const validMembers = candidateTeam.filter(p => {
                                 const pStart = timeToMinutes(p.useDefaultTime ? config.startTime : p.availStart);
-                                const pEnd = timeToMinutes(p.useDefaultTime ? config.endTime : p.availEnd);
+                                const pEnd = getEndTimeMinutes(p.useDefaultTime ? config.endTime : p.availEnd);
+                                
+                                // [Fixed Time Logic] 엄격한 시간 체크: 슬롯이 근무 시간 '내'에 있어야 함
+                                // 시작 시간: 슬롯 시작 >= 근무 시작
+                                // 종료 시간: 슬롯 종료 <= 근무 종료
                                 const isTimeOk = currentSlotMinutes >= pStart && nextSlotMinutes <= pEnd;
+                                
                                 const isLocOk = p.preferredLocation === '' || p.preferredLocation === undefined || parseInt(p.preferredLocation) === i;
                                 
                                 let isAssignedElsewhere = false;
@@ -393,14 +502,11 @@
                         }
                     }
 
-                    // 2. Floater 재조합 (Pairing) - 빈 장소가 있다면 Floater끼리 묶어서 배치
+                    // 2. Floater 재조합
                     const emptyLocations = currentAssignments.filter(a => a.members.length === 0);
-                    
                     while (emptyLocations.length > 0 && floaters.length >= 2) {
                         const p1 = floaters[0];
-                        // 짝꿍 찾기: p1이 여성일 경우, p2가 남성이거나(혼성) 여성이어도 됨
                         const p2 = floaters[1];
-                        
                         const targetLoc = emptyLocations.shift();
                         if(targetLoc) {
                             targetLoc.members.push(p1, p2);
@@ -408,56 +514,25 @@
                         }
                     }
 
-                    // 3. 남은 Floater 배분 (Strict Rules Applied)
+                    // 3. [Updated] 남은 Floater 배분
                     while (floaters.length > 0) {
                         const person = floaters.shift();
                         let target = null;
 
-                        // [Rule] 여성은 혼자 남을 수 없음 (무조건 합류)
-                        if (person.gender === 'F') {
-                            // 1. 인원이 가장 적은 '활성 그룹' 찾기 (빈 그룹 제외)
-                            const activeGroups = currentAssignments.filter(g => g.members.length > 0);
-                            if (activeGroups.length > 0) {
-                                // 1순위: 1명만 있는 그룹 (짝을 맞춰줌)
-                                let bestTarget = activeGroups.find(g => g.members.length === 1);
-                                
-                                // 2순위: 2명인 그룹 (3인조)
-                                if (!bestTarget) bestTarget = activeGroups.find(g => g.members.length === 2);
-                                
-                                // 3순위: 그 외 가장 적은 그룹
-                                if (!bestTarget) {
-                                    activeGroups.sort((a, b) => a.members.length - b.members.length);
-                                    bestTarget = activeGroups[0];
-                                }
-                                target = bestTarget;
-                            }
-                        } else {
-                            // 남성인 경우
-                            if (config.mergeRemainder) {
-                                // 균등 배분 (기존 그룹에 합류)
-                                const activeGroups = currentAssignments.filter(g => g.members.length > 0);
-                                if (activeGroups.length > 0) {
-                                    activeGroups.sort((a, b) => a.members.length - b.members.length);
-                                    target = activeGroups[0];
-                                }
-                            } else {
-                                // 빈자리에 혼자 배치 가능
-                                target = currentAssignments.find(g => g.members.length === 0);
-                            }
-                        }
-
-                        // 위 로직에서 타겟을 못 찾았다면 (예: 여성이 남았는데 모든 그룹이 비어있음 -> 불가능한 상황이지만 안전장치)
-                        // 또는 남성이 남았는데 빈자리가 없음 -> 기존 그룹에 합류
-                        if (!target) {
-                             const groups = currentAssignments.filter(g => g.members.length > 0);
-                             if (groups.length > 0) {
-                                 groups.sort((a, b) => a.members.length - b.members.length);
-                                 target = groups[0];
-                             } else {
-                                 // 모든 곳이 비어있는데 배치해야 함 (첫번째 사람)
-                                 // 여성이면 혼자라도 둬야 함 (시스템 한계), 하지만 다음 루프에서 누군가 들어오길 기대
-                                 target = currentAssignments.find(g => g.members.length === 0);
-                             }
+                        const activeGroups = currentAssignments.filter(g => g.members.length > 0);
+                        const emptyGroups = currentAssignments.filter(g => g.members.length === 0);
+                        
+                        // [New Priority Rule]
+                        const onePersonGroup = activeGroups.find(g => g.members.length === 1);
+                        if (onePersonGroup) {
+                            target = onePersonGroup;
+                        } 
+                        else if (activeGroups.length > 0) {
+                             activeGroups.sort((a, b) => a.members.length - b.members.length);
+                             target = activeGroups[0];
+                        } 
+                        else if (emptyGroups.length > 0 && person.gender === 'M') {
+                            target = emptyGroups[0];
                         }
 
                         if (target) {
@@ -465,56 +540,94 @@
                         }
                     }
 
-                    // 4. [Final Check] 여성 1인 근무 방지 (강제 이동)
+                    // 4. 여성 1인 근무 방지
                     currentAssignments.forEach(assignment => {
                         if (assignment.members.length === 1 && assignment.members[0].gender === 'F') {
-                            const loneFemale = assignment.members.pop(); // 그룹에서 뺌
-                            
-                            // 다른 그룹으로 이동 시도
+                            const loneFemale = assignment.members.pop(); 
                             const otherGroups = currentAssignments.filter(g => g !== assignment && g.members.length > 0);
                             if (otherGroups.length > 0) {
                                 otherGroups.sort((a, b) => a.members.length - b.members.length);
                                 otherGroups[0].members.push(loneFemale);
                             } else {
-                                // 갈 곳이 정말 없다면... 다시 넣어야 함 (어쩔 수 없음)
                                 assignment.members.push(loneFemale);
                             }
                         }
                     });
 
-                    // 최종 스케줄 반영
+                    // 5. 비움 방지를 위한 남성 인원 재배치
+                    if (!config.mergeRemainder) {
+                        const finalEmptyGroups = currentAssignments.filter(g => g.members.length === 0);
+                        if (finalEmptyGroups.length > 0) {
+                            for (const emptyGroup of finalEmptyGroups) {
+                                let donorGroup = currentAssignments.find(g => g.members.length > parseInt(config.peoplePerShift) && g.members.some(m => m.gender === 'M'));
+                                
+                                if (!donorGroup) {
+                                    donorGroup = currentAssignments.find(g => {
+                                        if (g.members.length < 2) return false;
+                                        const maleIndex = g.members.findIndex(m => m.gender === 'M');
+                                        if (maleIndex === -1) return false;
+                                        const remainingMembers = [...g.members];
+                                        remainingMembers.splice(maleIndex, 1);
+                                        if (remainingMembers.length === 1 && remainingMembers[0].gender === 'F') return false;
+                                        return true;
+                                    });
+                                }
+
+                                if (donorGroup) {
+                                    const maleIndex = donorGroup.members.findIndex(m => m.gender === 'M');
+                                    const movedMan = donorGroup.members.splice(maleIndex, 1)[0];
+                                    emptyGroup.members.push(movedMan);
+                                }
+                            }
+                        }
+                    }
+                    
+                    currentAssignments.forEach(ass => {
+                        ass.members.forEach(m => assignedPersonIds.add(m.id));
+                    });
+
                     currentAssignments.forEach((assignment, idx) => {
                         const locName = locations[idx];
                         newSchedule[time][locName] = assignment.members.length > 0 ? assignment.members : [null];
                     });
                 });
+                
                 setSchedule(newSchedule);
+                
+                const missing = participants.filter(p => !assignedPersonIds.has(p.id));
+                if (missing.length > 0) {
+                    let suggestion = `현재 장소와 시간으로는 ${participants.length}명을 모두 수용하기 어렵습니다.\n`;
+                    suggestion += `💡 제안: 근무 장소를 늘리거나, 타임당 인원을 늘려보세요.`;
+                    
+                    setAlertData({ 
+                        isOpen: true, 
+                        missing: missing.map(m => m.name),
+                        suggestion: suggestion 
+                    });
+                } else {
+                    setAlertData({ isOpen: false, missing: [], suggestion: "" });
+                }
             };
 
-            const copyToClipboard = () => {
-                let text = `[스마트 교대 근무표]\n`;
-                text += `운영 시간: ${config.startTime} ~ ${config.endTime}\n\n`;
-
-                const sortedTimes = Object.keys(schedule).sort();
-                sortedTimes.forEach(time => {
-                    text += `⏰ ${time}\n`;
-                    locations.forEach(loc => {
-                        const members = schedule[time][loc];
-                        if (members && members.length > 0) {
-                            const names = members.map(m => m ? m.name : "미배정").join(", ");
-                            text += `  └ ${loc}: ${names}\n`;
-                        }
+            const handleDownloadImage = async () => {
+                if (!scheduleRef.current) return;
+                
+                try {
+                    const canvas = await html2canvas(scheduleRef.current, {
+                        scale: 2, 
+                        backgroundColor: "#ffffff",
+                        useCORS: true
                     });
-                    text += `\n`;
-                });
-                text += `\n(생성된 근무표입니다)`;
-
-                navigator.clipboard.writeText(text).then(() => {
-                    alert("근무표가 복사되었습니다!\n카카오톡 채팅방에 '붙여넣기' 하세요.");
-                }).catch(err => {
-                    console.error("복사 실패:", err);
-                    alert("복사하기 기능을 지원하지 않는 브라우저입니다.");
-                });
+                    
+                    const image = canvas.toDataURL("image/png");
+                    const link = document.createElement("a");
+                    link.href = image;
+                    link.download = `근무표_${new Date().toISOString().split('T')[0]}.png`;
+                    link.click();
+                } catch (error) {
+                    console.error("이미지 저장 실패:", error);
+                    alert("이미지 저장 중 오류가 발생했습니다.");
+                }
             };
 
             const handleConfigChange = (e) => {
@@ -523,7 +636,7 @@
             };
 
             const updateLocations = (count) => {
-                const newCount = Math.min(5, Math.max(1, count));
+                const newCount = Math.min(10, Math.max(1, count));
                 setConfig(prev => ({ ...prev, locationCount: newCount }));
                 setLocations(prev => {
                     const newLocs = [...prev];
@@ -564,6 +677,14 @@
                 setParticipants(participants.map(p => 
                     p.partnerId == id ? { ...p, partnerId: null } : p
                 ).filter(p => p.id !== id));
+            };
+            
+            // [Fixed] 전체 삭제 로직 - 현재 탭의 성별만 삭제
+            const removeAllParticipants = () => {
+                if (window.confirm(`${genderTab === 'M' ? '남성' : '여성'} 목록을 모두 삭제하시겠습니까?`)) {
+                    // 현재 genderTab과 일치하는 사람만 제외(삭제)하고 나머지는 유지
+                    setParticipants(prev => prev.filter(p => p.gender !== genderTab));
+                }
             };
 
             const updateParticipant = (id, field, value) => {
@@ -612,11 +733,13 @@
 
             const filteredParticipants = participants.filter(p => p.gender === genderTab);
 
+            const maxWidthClass = locations.length <= 1 ? "max-w-3xl" : "max-w-6xl";
+
             return (
-                <div className="min-h-screen font-sans pb-10">
+                <div className="min-h-screen font-sans pb-10 flex flex-col bg-gray-50/50">
                     {/* Header */}
                     <header className="bg-white sticky top-0 z-20 border-b border-gray-200">
-                        <div className="max-w-5xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div className={`mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4 transition-all duration-300 ${maxWidthClass}`}>
                             <div className="flex items-center gap-3">
                                 <div className="bg-gradient-to-br from-indigo-600 to-indigo-800 p-2.5 rounded-xl shadow-lg shadow-indigo-200">
                                     <Clock className="w-7 h-7 text-white" />
@@ -634,94 +757,138 @@
                                 <button onClick={() => setShuffleCount(prev => prev + 1)} className="modern-btn bg-purple-50 border border-purple-100 text-purple-700 hover:bg-purple-100">
                                     <Shuffle className="w-5 h-5 mr-2" /> 짝 섞기
                                 </button>
-                                <button onClick={copyToClipboard} className="modern-btn bg-yellow-400 text-yellow-950 hover:bg-yellow-500 border border-yellow-500 shadow-sm">
-                                    <Share2 className="w-5 h-5 mr-2" /> 공유
+                                <button onClick={handleDownloadImage} className="modern-btn bg-yellow-400 text-yellow-950 hover:bg-yellow-500 border border-yellow-500 shadow-sm">
+                                    <ImageDown className="w-5 h-5 mr-2" /> 이미지 저장
                                 </button>
                             </div>
                         </div>
                     </header>
 
                     {/* Main Content */}
-                    <main className="max-w-5xl mx-auto px-4 py-8">
-                        {/* Status Cards */}
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                            <div className="modern-card p-5 text-center">
-                                <p className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">총 인원</p>
-                                <p className="text-3xl font-extrabold text-gray-900">{participants.length}<span className="text-lg font-medium text-gray-400 ml-1">명</span></p>
+                    <main className={`mx-auto px-4 py-8 flex-1 w-full transition-all duration-300 ${maxWidthClass}`}>
+                        
+                        <div ref={scheduleRef} className="space-y-8 bg-gray-50/50 p-2 rounded-2xl">
+                            {/* Status Cards */}
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="modern-card p-5 text-center">
+                                    <p className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">총 인원</p>
+                                    <p className="text-3xl font-extrabold text-gray-900">{participants.length}<span className="text-lg font-medium text-gray-400 ml-1">명</span></p>
+                                </div>
+                                <div className="modern-card p-5 text-center">
+                                    <p className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">장소</p>
+                                    <p className="text-3xl font-extrabold text-gray-900">{locations.length}<span className="text-lg font-medium text-gray-400 ml-1">곳</span></p>
+                                </div>
+                                <div className="modern-card p-5 text-center">
+                                    <p className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">간격</p>
+                                    <p className="text-3xl font-extrabold text-gray-900">{config.interval}<span className="text-lg font-medium text-gray-400 ml-1">분</span></p>
+                                </div>
+                                <div className="modern-card p-5 text-center bg-indigo-50 border-indigo-100">
+                                    <p className="text-sm font-bold text-indigo-400 uppercase tracking-wide mb-1">방식</p>
+                                    <p className="text-lg font-bold text-indigo-700">{config.mergeRemainder ? "균등 배분" : "정량 배정"}</p>
+                                    <p className="text-sm text-indigo-500 font-medium">{config.genderRule === 'mixed' ? '혼성' : '분리'}</p>
+                                </div>
                             </div>
-                            <div className="modern-card p-5 text-center">
-                                <p className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">장소</p>
-                                <p className="text-3xl font-extrabold text-gray-900">{locations.length}<span className="text-lg font-medium text-gray-400 ml-1">곳</span></p>
-                            </div>
-                            <div className="modern-card p-5 text-center">
-                                <p className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">간격</p>
-                                <p className="text-3xl font-extrabold text-gray-900">{config.interval}<span className="text-lg font-medium text-gray-400 ml-1">분</span></p>
-                            </div>
-                            <div className="modern-card p-5 text-center bg-indigo-50 border-indigo-100">
-                                <p className="text-sm font-bold text-indigo-400 uppercase tracking-wide mb-1">방식</p>
-                                <p className="text-lg font-bold text-indigo-700">{config.mergeRemainder ? "균등 배분" : "정량 배정"}</p>
-                                <p className="text-sm text-indigo-500 font-medium">{config.genderRule === 'mixed' ? '혼성' : '분리'}</p>
-                            </div>
-                        </div>
 
-                        {/* Time Bar */}
-                        <div className="modern-card bg-gray-900 text-white p-5 flex flex-col sm:flex-row justify-between items-center mb-8 shadow-xl shadow-gray-300">
-                            <div className="flex items-center gap-3 mb-2 sm:mb-0">
-                                <div className="bg-white/10 p-2 rounded-lg"><Clock className="w-5 h-5 text-indigo-300" /></div>
-                                <span className="font-bold text-lg">운영 시간</span>
+                            {/* Time Bar */}
+                            <div className="modern-card bg-gray-900 text-white p-5 flex flex-col sm:flex-row justify-between items-center shadow-xl shadow-gray-300">
+                                <div className="flex items-center gap-3 mb-2 sm:mb-0">
+                                    <div className="bg-white/10 p-2 rounded-lg"><Clock className="w-5 h-5 text-indigo-300" /></div>
+                                    <span className="font-bold text-lg">운영 시간</span>
+                                </div>
+                                <div className="flex flex-col sm:flex-row items-center gap-4 text-center sm:text-right">
+                                    <div className="text-2xl font-mono font-bold tracking-widest text-indigo-200">{config.startTime} ~ {config.endTime}</div>
+                                    {manager.name && (
+                                        <div className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-lg border border-white/10">
+                                            <span className="text-xs text-indigo-300 font-semibold uppercase tracking-wider">담당자</span>
+                                            <span className="text-base font-bold">{manager.name}</span>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                            <div className="text-2xl font-mono font-bold tracking-widest text-indigo-200">{config.startTime} ~ {config.endTime}</div>
-                        </div>
 
-                        {/* Schedule Table */}
-                        <div className="modern-card overflow-hidden">
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-left border-collapse">
-                                    <thead>
-                                        <tr className="bg-gray-50 border-b border-gray-200">
-                                            <th className="p-5 font-bold text-gray-600 text-sm uppercase tracking-wider w-28 sticky left-0 bg-gray-50 z-10 border-r border-gray-200">Time</th>
-                                            {locations.map((loc, idx) => (
-                                                <th key={idx} className="p-5 font-bold text-gray-600 text-sm uppercase tracking-wider min-w-[200px]">
-                                                    <div className="flex items-center gap-2">
-                                                        <MapPin className="w-4 h-4 text-indigo-600" /> {loc}
-                                                    </div>
-                                                </th>
-                                            ))}
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-100">
-                                        {Object.keys(schedule).sort().map((time) => (
-                                            <tr key={time} className="hover:bg-gray-50 transition-colors">
-                                                <td className="p-5 font-mono font-bold text-gray-700 text-lg sticky left-0 bg-white border-r border-gray-200 shadow-[4px_0_10px_-4px_rgba(0,0,0,0.05)]">{time}</td>
-                                                {locations.map((loc) => (
-                                                    <td key={`${time}-${loc}`} className="p-4 align-top">
-                                                        <div className="flex flex-wrap gap-2">
-                                                            {schedule[time]?.[loc]?.map((person, pIdx) => (
-                                                                person ? (
-                                                                    <div key={pIdx} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-base font-bold shadow-sm border ${person.gender === 'M' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-pink-50 text-pink-700 border-pink-200'}`}>
-                                                                        <div className={`w-2.5 h-2.5 rounded-full ${person.gender === 'M' ? 'bg-blue-500' : 'bg-pink-500'}`}></div>
-                                                                        {person.name}
-                                                                    </div>
-                                                                ) : (
-                                                                    <div key={pIdx} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-gray-400 bg-gray-50 border border-dashed border-gray-300">
-                                                                        <AlertCircle className="w-4 h-4"/> 비움
-                                                                    </div>
-                                                                )
-                                                            ))}
-                                                            {(!schedule[time]?.[loc] || schedule[time][loc].length === 0) && <span className="text-gray-300 text-sm px-2">-</span>}
+                            {/* Schedule Table */}
+                            <div className="modern-card overflow-hidden">
+                                <div className="overflow-x-auto pb-4">
+                                    <table className="w-full text-left border-collapse min-w-full">
+                                        <thead>
+                                            <tr className="bg-gray-50 border-b-2 border-gray-200">
+                                                <th className="sticky-col-header p-5 font-bold text-gray-600 text-sm uppercase tracking-wider w-28 border-r-2 border-gray-200 shadow-sm z-30">Time</th>
+                                                {locations.map((loc, idx) => (
+                                                    <th key={idx} className={`p-5 font-bold text-gray-600 text-sm uppercase tracking-wider min-w-[200px] border-r-2 border-gray-200 ${idx === locations.length - 1 ? 'border-r-0' : ''}`}>
+                                                        <div className="flex items-center justify-center gap-2">
+                                                            <MapPin className="w-4 h-4 text-indigo-600" /> {loc}
                                                         </div>
-                                                    </td>
+                                                    </th>
                                                 ))}
                                             </tr>
-                                        ))}
-                                        {Object.keys(schedule).length === 0 && (
-                                            <tr><td colSpan={locations.length + 1} className="p-20 text-center text-gray-500 font-medium text-lg">상단 '설정' 버튼을 눌러 근무표를 생성해주세요.</td></tr>
-                                        )}
-                                    </tbody>
-                                </table>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {Object.keys(schedule).sort().map((time) => (
+                                                <tr key={time} className="hover:bg-gray-50 transition-colors">
+                                                    <td className="sticky-col-cell p-5 font-mono font-bold text-gray-700 text-lg border-r-2 border-gray-200 shadow-[4px_0_10px_-4px_rgba(0,0,0,0.05)]">{time}</td>
+                                                    {locations.map((loc, idx) => (
+                                                        <td key={`${time}-${loc}`} className={`p-4 align-top border-r-2 border-gray-200 text-center ${idx === locations.length - 1 ? 'border-r-0' : ''}`}>
+                                                            <div className="flex flex-wrap gap-1.5 justify-center">
+                                                                {schedule[time]?.[loc]?.map((person, pIdx) => (
+                                                                    person ? (
+                                                                        <div key={pIdx} className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-base font-bold shadow-sm border whitespace-nowrap ${person.gender === 'M' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-pink-50 text-pink-700 border-pink-200'}`}>
+                                                                            <div className={`w-2 h-2 rounded-full shrink-0 ${person.gender === 'M' ? 'bg-blue-500' : 'bg-pink-500'}`}></div>
+                                                                            {person.name}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div key={pIdx} className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-sm font-medium text-gray-400 bg-gray-50 border border-dashed border-gray-300 whitespace-nowrap">
+                                                                            <AlertCircle className="w-4 h-4"/> 비움
+                                                                        </div>
+                                                                    )
+                                                                ))}
+                                                                {(!schedule[time]?.[loc] || schedule[time][loc].length === 0) && <span className="text-gray-300 text-sm px-2">-</span>}
+                                                            </div>
+                                                        </td>
+                                                    ))}
+                                                </tr>
+                                            ))}
+                                            {Object.keys(schedule).length === 0 && (
+                                                <tr><td colSpan={locations.length + 1} className="p-20 text-center text-gray-500 font-medium text-lg">상단 '설정' 버튼을 눌러 근무표를 생성해주세요.</td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
+
                     </main>
+
+                    {/* Footer */}
+                    <footer className="py-8 text-center text-gray-400 text-sm border-t border-gray-200 mt-auto bg-gray-50">
+                        <p className="flex items-center justify-center gap-2 mb-2"><span className="w-2 h-2 rounded-full bg-green-400"></span> 모든 데이터는 저장되지 않습니다.</p>
+                        <p>문의하기: <a href="mailto:mifarssel25@gmail.com" className="hover:text-indigo-600 transition font-medium underline decoration-indigo-200 underline-offset-4">mifarssel25@gmail.com</a></p>
+                    </footer>
+
+                    {/* Alert Modal */}
+                    {alertData.isOpen && (
+                        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-6 animate-[fadeIn_0.2s_ease-out]">
+                            <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border border-red-100 animate-[scaleUp_0.3s_cubic-bezier(0.16,1,0.3,1)]">
+                                <div className="p-6 bg-red-50 border-b border-red-100 flex items-start gap-4">
+                                    <div className="bg-red-100 p-2 rounded-full text-red-600"><AlertTriangle className="w-6 h-6" /></div>
+                                    <div>
+                                        <h3 className="text-lg font-bold text-red-900">누락 인원 발생!</h3>
+                                        <p className="text-sm text-red-700 mt-1">다음 인원이 스케줄에 한 번도 배정되지 않았습니다.</p>
+                                    </div>
+                                </div>
+                                <div className="p-6">
+                                    <div className="bg-gray-50 rounded-lg p-3 mb-4 border border-gray-200">
+                                        <p className="font-bold text-gray-800">{alertData.missing.join(", ")}</p>
+                                    </div>
+                                    <div className="text-sm text-gray-600 whitespace-pre-line bg-blue-50 p-4 rounded-xl border border-blue-100 text-blue-900 leading-relaxed">
+                                        {alertData.suggestion}
+                                    </div>
+                                </div>
+                                <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end">
+                                    <button onClick={() => setAlertData({ ...alertData, isOpen: false })} className="px-6 py-2.5 bg-gray-900 text-white font-bold rounded-xl hover:bg-black transition">확인</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Setup Modal */}
                     {isSetupOpen && (
@@ -761,8 +928,9 @@
                                             <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
                                                 <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><Clock className="w-5 h-5 text-gray-400"/> 시간 및 인원</h3>
                                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
-                                                    <div><label className="block text-sm font-bold text-gray-700 mb-1.5">시작</label><input type="time" name="startTime" value={config.startTime} onChange={handleConfigChange} className="modern-input" /></div>
-                                                    <div><label className="block text-sm font-bold text-gray-700 mb-1.5">종료</label><input type="time" name="endTime" value={config.endTime} onChange={handleConfigChange} className="modern-input" /></div>
+                                                    {/* [Updated] TimeSelect 컴포넌트 사용 */}
+                                                    <div><label className="block text-sm font-bold text-gray-700 mb-1.5">시작</label><TimeSelect value={config.startTime} onChange={(e) => setConfig({...config, startTime: e.target.value})} className="modern-input cursor-pointer" /></div>
+                                                    <div><label className="block text-sm font-bold text-gray-700 mb-1.5">종료</label><TimeSelect value={config.endTime} onChange={(e) => setConfig({...config, endTime: e.target.value})} className="modern-input cursor-pointer" /></div>
                                                     <div><label className="block text-sm font-bold text-gray-700 mb-1.5">간격</label>
                                                         <select name="interval" value={config.interval} onChange={handleConfigChange} className="modern-input">
                                                             {[5,10,15,20,25,30,60].map(m => <option key={m} value={m}>{m}분</option>)}
@@ -772,12 +940,17 @@
                                                 </div>
                                                 
                                                 <div className="mt-6 flex flex-col md:flex-row gap-4">
-                                                    <div className="flex-1 bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
-                                                        <div>
-                                                            <label htmlFor="mergeRemainder" className="block text-base font-bold text-gray-900 cursor-pointer">자투리 균등 배분</label>
-                                                            <p className="text-sm text-gray-500 mt-0.5">남는 인원을 모든 조에 골고루 나눕니다.</p>
+                                                    <div className="flex-1 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                                                        <p className="text-base font-bold text-gray-900 mb-2">자투리 인원 처리</p>
+                                                        <div className="flex bg-gray-100 p-1 rounded-lg">
+                                                            <label className={`flex-1 text-center py-2 text-sm font-bold rounded-md cursor-pointer transition ${config.mergeRemainder ? 'bg-white shadow-sm text-indigo-600 ring-1 ring-black/5' : 'text-gray-500'}`}>
+                                                                <input type="radio" name="mergeRemainder" checked={config.mergeRemainder} onChange={() => setConfig({...config, mergeRemainder: true})} className="hidden" /> 균등 배분
+                                                            </label>
+                                                            <label className={`flex-1 text-center py-2 text-sm font-bold rounded-md cursor-pointer transition ${!config.mergeRemainder ? 'bg-white shadow-sm text-indigo-600 ring-1 ring-black/5' : 'text-gray-500'}`}>
+                                                                <input type="radio" name="mergeRemainder" checked={!config.mergeRemainder} onChange={() => setConfig({...config, mergeRemainder: false})} className="hidden" /> 정량 배정
+                                                            </label>
                                                         </div>
-                                                        <ToggleSwitch id="mergeRemainder" checked={config.mergeRemainder} onChange={handleConfigChange} />
+                                                        <p className="text-xs text-gray-500 mt-2 text-center">균등: 남은 인원을 골고루 나눔 / 정량: 1명이라도 별도 조 생성</p>
                                                     </div>
 
                                                     <div className="flex-1 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
@@ -822,9 +995,15 @@
                                                 <button onClick={() => setGenderTab('F')} className={`flex-1 py-4 rounded-xl text-lg font-bold transition flex items-center justify-center gap-2 border-2 ${genderTab === 'F' ? 'bg-pink-600 text-white border-pink-600 shadow-md' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'}`}>여성 목록</button>
                                             </div>
                                             
-                                            <div className="relative mb-6">
-                                                <input type="text" value={newNameInput} onChange={(e) => setNewNameInput(e.target.value)} onKeyDown={handleAddParticipant} placeholder="새로운 참여자 이름 입력" className="modern-input pl-5 pr-24 py-4 text-lg shadow-sm border-gray-300" />
-                                                <button onClick={() => handleAddParticipant({ key: 'Enter', preventDefault: () => {} })} className="absolute right-2 top-2 bottom-2 px-6 bg-gray-900 text-white rounded-lg text-base font-bold hover:bg-black transition">추가</button>
+                                            <div className="flex gap-2 relative mb-6">
+                                                <div className="relative flex-1">
+                                                    <input type="text" value={newNameInput} onChange={(e) => setNewNameInput(e.target.value)} onKeyDown={handleAddParticipant} placeholder="새로운 참여자 이름 입력" className="modern-input pl-5 pr-24 py-4 text-lg shadow-sm border-gray-300" />
+                                                    <button onClick={() => handleAddParticipant({ key: 'Enter', preventDefault: () => {} })} className="absolute right-2 top-2 bottom-2 px-6 bg-gray-900 text-white rounded-lg text-base font-bold hover:bg-black transition">추가</button>
+                                                </div>
+                                                {/* [New] 전체 삭제 버튼 */}
+                                                <button onClick={removeAllParticipants} className="px-4 bg-red-100 text-red-600 rounded-xl hover:bg-red-200 transition flex items-center justify-center">
+                                                    <TrashAll className="w-5 h-5" />
+                                                </button>
                                             </div>
 
                                             {/* Improved List View for Scalability */}
@@ -848,14 +1027,14 @@
                                                                 <div className="flex flex-wrap items-center gap-3 flex-1 w-full">
                                                                     <div className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-2 flex-1 min-w-[140px]">
                                                                         <LinkIcon className="w-4 h-4 text-gray-500" />
-                                                                        <select value={p.partnerId || ""} onChange={(e) => updateParticipant(p.id, 'partnerId', e.target.value)} className="bg-transparent text-base font-medium text-gray-700 w-full outline-none cursor-pointer">
+                                                                        <select value={p.partnerId || ""} onChange={(e) => updateParticipant(p.id, 'partnerId', e.target.value)} className="modern-input !py-2 !text-sm bg-transparent !border-0 focus:!ring-0 cursor-pointer">
                                                                             <option value="">짝꿍 없음</option>
                                                                             {participants.filter(u => u.id !== p.id).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                                                                         </select>
                                                                     </div>
                                                                     <div className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-2 flex-1 min-w-[140px]">
                                                                         <Lock className="w-4 h-4 text-gray-500" />
-                                                                        <select value={p.preferredLocation || ""} onChange={(e) => updateParticipant(p.id, 'preferredLocation', e.target.value)} className="bg-transparent text-base font-medium text-gray-700 w-full outline-none cursor-pointer">
+                                                                        <select value={p.preferredLocation || ""} onChange={(e) => updateParticipant(p.id, 'preferredLocation', e.target.value)} className="modern-input !py-2 !text-sm bg-transparent !border-0 focus:!ring-0 cursor-pointer">
                                                                             <option value="">장소 미지정</option>
                                                                             {locations.map((loc, idx) => <option key={idx} value={idx}>{loc}</option>)}
                                                                         </select>
@@ -869,9 +1048,20 @@
                                                                     </div>
                                                                     {!p.useDefaultTime && (
                                                                         <div className="flex items-center gap-1 bg-white border border-gray-300 rounded-lg px-2 py-1 shadow-sm">
-                                                                            <input type="time" value={p.availStart} onChange={(e) => updateParticipant(p.id, 'availStart', e.target.value)} className="text-sm font-mono font-bold bg-transparent outline-none w-20 text-center" />
+                                                                            {/* [Updated] 개별 시간 설정도 TimeSelect 사용 (범위 제한) */}
+                                                                            <TimeSelect 
+                                                                                value={p.availStart} 
+                                                                                onChange={(e) => updateParticipant(p.id, 'availStart', e.target.value)} 
+                                                                                options={restrictedTimeOptions}
+                                                                                className="text-sm font-mono font-bold bg-transparent outline-none w-20 text-center cursor-pointer" 
+                                                                            />
                                                                             <span className="text-gray-400">~</span>
-                                                                            <input type="time" value={p.availEnd} onChange={(e) => updateParticipant(p.id, 'availEnd', e.target.value)} className="text-sm font-mono font-bold bg-transparent outline-none w-20 text-center" />
+                                                                            <TimeSelect 
+                                                                                value={p.availEnd} 
+                                                                                onChange={(e) => updateParticipant(p.id, 'availEnd', e.target.value)} 
+                                                                                options={restrictedTimeOptions}
+                                                                                className="text-sm font-mono font-bold bg-transparent outline-none w-20 text-center cursor-pointer" 
+                                                                            />
                                                                         </div>
                                                                     )}
                                                                     <button onClick={() => removeParticipant(p.id)} className="w-10 h-10 flex items-center justify-center bg-gray-100 text-gray-400 rounded-full hover:bg-red-50 hover:text-red-500 transition ml-2"><Trash2 className="w-5 h-5" /></button>
@@ -880,6 +1070,9 @@
                                                         ))}
                                                     </div>
                                                 )}
+                                            </div>
+                                            <div className="mt-4 text-center text-xs text-gray-400">
+                                                <p>⚠️ 입력하신 정보는 브라우저에만 저장되며 서버로 전송되지 않습니다.</p>
                                             </div>
                                         </div>
                                     )}
