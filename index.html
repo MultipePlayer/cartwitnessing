@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>스마트 교대 근무표 (Pro)</title>
+    <title>스마트 전시대 교대표</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -96,12 +96,6 @@
             background-color: white;
             z-index: 10;
         }
-        
-        /* Column Separator for readability */
-        .col-separator {
-            border-right-width: 2px;
-            border-right-color: #E5E7EB; /* tailwind gray-200 */
-        }
     </style>
 </head>
 <body>
@@ -192,7 +186,7 @@
             return array;
         };
         
-        // [New] 10분 단위 시간 생성 유틸 (전체)
+        // 10분 단위 시간 생성 유틸 (전체)
         const generateAllTimeOptions = () => {
             const options = [];
             for (let h = 0; h < 24; h++) {
@@ -205,25 +199,21 @@
             return options;
         };
 
-        // [New] 범위 내 시간 생성 유틸
+        // 범위 내 시간 생성 유틸
         const generateRestrictedTimeOptions = (startStr, endStr) => {
             const options = [];
             const startMins = timeToMinutes(startStr);
             const endMins = getEndTimeMinutes(endStr);
             
-            // 24시간 전체 루프
             for (let h = 0; h < 24; h++) {
                 for (let m = 0; m < 60; m += 10) {
                     const currentMins = h * 60 + m;
-                    // 종료 시간이 다음날(예: 00:00 = 1440)인 경우 등을 고려
-                    // 단순화를 위해 start <= current <= end (자정 넘는 근무는 추후 고려, 현재는 단순 비교)
                     if (currentMins >= startMins && currentMins <= endMins) {
                         const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
                         options.push(timeStr);
                     }
                 }
             }
-            // 자정 포함 여부
             if (endMins >= 24 * 60) options.push("00:00");
             
             return options;
@@ -231,7 +221,6 @@
 
         const allTimeOptions = generateAllTimeOptions();
 
-        // [Updated] TimeSelect: options를 props로 받거나 기본값 사용
         const TimeSelect = ({ value, onChange, className, options }) => (
             <select value={value} onChange={onChange} className={className}>
                 {(options || allTimeOptions).map((t) => (
@@ -240,7 +229,6 @@
             </select>
         );
         
-        // [Fixed] Toggle Switch
         const ToggleSwitch = ({ checked, onChange, id }) => (
             <div className="relative inline-block w-[52px] h-[32px] align-middle select-none transition duration-200 ease-in">
                 <input 
@@ -261,10 +249,9 @@
 
         // --- 메인 컴포넌트 ---
         function ShiftScheduler() {
-            // 1. 설정 상태
             const [config, setConfig] = useState({
                 startTime: '10:00', 
-                endTime: '12:00',   // [Fixed] Default End Time
+                endTime: '12:00', 
                 interval: 15, 
                 peoplePerShift: 2,
                 locationCount: 1, 
@@ -300,15 +287,11 @@
             const [shuffleCount, setShuffleCount] = useState(0); 
             const [alertData, setAlertData] = useState({ isOpen: false, missing: [], suggestion: "" });
             
-            // Ref for capturing
             const scheduleRef = useRef(null);
 
-            // [New] Dynamic Time Options based on config
             const restrictedTimeOptions = useMemo(() => {
                 return generateRestrictedTimeOptions(config.startTime, config.endTime);
             }, [config.startTime, config.endTime]);
-
-            // --- 로직 ---
 
             const preprocessParticipants = (originalList, genderRule, peoplePerShift) => {
                 let processedList = [...originalList];
@@ -457,6 +440,26 @@
                     const currentAssignments = []; 
                     locations.forEach((_, idx) => currentAssignments.push({ locIndex: idx, members: [] }));
                     
+                    // [Step 0: Fixed Time Assignment - UNCONDITIONAL PRIORITY]
+                    const fixedTimeUsers = participants.filter(p => !p.useDefaultTime);
+                    fixedTimeUsers.forEach(user => {
+                        const pStart = timeToMinutes(user.availStart);
+                        const pEnd = getEndTimeMinutes(user.availEnd);
+                        
+                        if (currentSlotMinutes >= pStart && nextSlotMinutes <= pEnd) {
+                            let targetLocIdx = 0;
+                            if (user.preferredLocation !== '' && user.preferredLocation !== undefined) {
+                                targetLocIdx = parseInt(user.preferredLocation);
+                            }
+                            
+                            // 무조건 배치 (인원 제한 무시 - Fixed Time Priority)
+                            if (!currentAssignments[targetLocIdx].members.some(m => m.id === user.id)) {
+                                currentAssignments[targetLocIdx].members.push(user);
+                            }
+                        }
+                    });
+
+                    
                     const floaters = [];
 
                     if (config.genderRule === 'separate' && locations.length > 1) {
@@ -465,19 +468,23 @@
 
                     // 1. 완전한 팀 우선 배정
                     for (let i = 0; i < locations.length; i++) {
+                        // [Updated] 정량 배정(Merge OFF)일 때는 정원 초과 금지 (이미 고정 인원으로 꽉 찼으면 패스)
+                        // 균등 배분(Merge ON)일 때는 조금 넘쳐도 허용
+                        const limit = config.mergeRemainder ? parseInt(config.peoplePerShift) + 1 : parseInt(config.peoplePerShift);
+                        
+                        if (currentAssignments[i].members.length >= limit) continue;
+
                         let attempts = 0;
                         while (attempts < teams.length) {
                             const candidateTeam = teams[teamIndex % teams.length];
                             
                             const validMembers = candidateTeam.filter(p => {
-                                const pStart = timeToMinutes(p.useDefaultTime ? config.startTime : p.availStart);
-                                const pEnd = getEndTimeMinutes(p.useDefaultTime ? config.endTime : p.availEnd);
+                                if (!p.useDefaultTime) return false;
+
+                                const pStart = timeToMinutes(config.startTime);
+                                const pEnd = getEndTimeMinutes(config.endTime);
                                 
-                                // [Fixed Time Logic] 엄격한 시간 체크: 슬롯이 근무 시간 '내'에 있어야 함
-                                // 시작 시간: 슬롯 시작 >= 근무 시작
-                                // 종료 시간: 슬롯 종료 <= 근무 종료
                                 const isTimeOk = currentSlotMinutes >= pStart && nextSlotMinutes <= pEnd;
-                                
                                 const isLocOk = p.preferredLocation === '' || p.preferredLocation === undefined || parseInt(p.preferredLocation) === i;
                                 
                                 let isAssignedElsewhere = false;
@@ -492,8 +499,14 @@
                             attempts++;
 
                             if (validMembers.length > 0 && validMembers.length === candidateTeam.length) {
-                                currentAssignments[i].members = validMembers;
-                                break; 
+                                // 남은 자리에 들어갈 수 있는지 체크
+                                if (currentAssignments[i].members.length + validMembers.length <= limit + 1) { // 유연하게 +1
+                                    currentAssignments[i].members.push(...validMembers);
+                                    break; 
+                                } else {
+                                    // 자리가 부족하면 Floater로
+                                    floaters.push(...validMembers);
+                                }
                             } else {
                                 if (validMembers.length > 0) {
                                     floaters.push(...validMembers);
@@ -514,7 +527,7 @@
                         }
                     }
 
-                    // 3. [Updated] 남은 Floater 배분
+                    // 3. 남은 Floater 배분
                     while (floaters.length > 0) {
                         const person = floaters.shift();
                         let target = null;
@@ -522,14 +535,22 @@
                         const activeGroups = currentAssignments.filter(g => g.members.length > 0);
                         const emptyGroups = currentAssignments.filter(g => g.members.length === 0);
                         
-                        // [New Priority Rule]
                         const onePersonGroup = activeGroups.find(g => g.members.length === 1);
                         if (onePersonGroup) {
                             target = onePersonGroup;
                         } 
                         else if (activeGroups.length > 0) {
                              activeGroups.sort((a, b) => a.members.length - b.members.length);
-                             target = activeGroups[0];
+                             // 정량 배정(Merge OFF)이면 꽉 찬 방에는 넣지 않음 (단, 다른 대안이 없으면 넣음)
+                             if (!config.mergeRemainder && activeGroups[0].members.length >= parseInt(config.peoplePerShift)) {
+                                 if (emptyGroups.length > 0 && person.gender === 'M') {
+                                     target = emptyGroups[0];
+                                 } else {
+                                     target = activeGroups[0]; // 어쩔 수 없이 과밀
+                                 }
+                             } else {
+                                 target = activeGroups[0];
+                             }
                         } 
                         else if (emptyGroups.length > 0 && person.gender === 'M') {
                             target = emptyGroups[0];
@@ -682,7 +703,6 @@
             // [Fixed] 전체 삭제 로직 - 현재 탭의 성별만 삭제
             const removeAllParticipants = () => {
                 if (window.confirm(`${genderTab === 'M' ? '남성' : '여성'} 목록을 모두 삭제하시겠습니까?`)) {
-                    // 현재 genderTab과 일치하는 사람만 제외(삭제)하고 나머지는 유지
                     setParticipants(prev => prev.filter(p => p.gender !== genderTab));
                 }
             };
@@ -744,7 +764,7 @@
                                 <div className="bg-gradient-to-br from-indigo-600 to-indigo-800 p-2.5 rounded-xl shadow-lg shadow-indigo-200">
                                     <Clock className="w-7 h-7 text-white" />
                                 </div>
-                                <h1 className="text-2xl font-extrabold tracking-tight text-gray-900">스마트 교대 근무표 <span className="text-indigo-600">Pro</span></h1>
+                                <h1 className="text-2xl font-extrabold tracking-tight text-gray-900"> 스마트 전시대 교대표 <span className="text-indigo-600">Pro</span></h1>
                             </div>
                             
                             <div className="flex flex-wrap justify-center gap-2">
@@ -752,7 +772,7 @@
                                     <Settings className="w-5 h-5 mr-2" /> 설정
                                 </button>
                                 <button onClick={() => setRotationStep(prev => prev + 1)} className="modern-btn bg-indigo-50 border border-indigo-100 text-indigo-700 hover:bg-indigo-100">
-                                    <Rotate className="w-5 h-5 mr-2" /> 순서
+                                    <Rotate className="w-5 h-5 mr-2" /> 순서 섞기
                                 </button>
                                 <button onClick={() => setShuffleCount(prev => prev + 1)} className="modern-btn bg-purple-50 border border-purple-100 text-purple-700 hover:bg-purple-100">
                                     <Shuffle className="w-5 h-5 mr-2" /> 짝 섞기
@@ -1000,9 +1020,10 @@
                                                     <input type="text" value={newNameInput} onChange={(e) => setNewNameInput(e.target.value)} onKeyDown={handleAddParticipant} placeholder="새로운 참여자 이름 입력" className="modern-input pl-5 pr-24 py-4 text-lg shadow-sm border-gray-300" />
                                                     <button onClick={() => handleAddParticipant({ key: 'Enter', preventDefault: () => {} })} className="absolute right-2 top-2 bottom-2 px-6 bg-gray-900 text-white rounded-lg text-base font-bold hover:bg-black transition">추가</button>
                                                 </div>
-                                                {/* [New] 전체 삭제 버튼 */}
-                                                <button onClick={removeAllParticipants} className="px-4 bg-red-100 text-red-600 rounded-xl hover:bg-red-200 transition flex items-center justify-center">
+                                                {/* [Updated] 전체 삭제 버튼 - 텍스트 및 클릭 영역 보장 */}
+                                                <button type="button" onClick={removeAllParticipants} className="px-6 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition flex items-center justify-center gap-2 border border-red-100 font-bold">
                                                     <TrashAll className="w-5 h-5" />
+                                                    <span>전체 삭제</span>
                                                 </button>
                                             </div>
 
@@ -1028,7 +1049,7 @@
                                                                     <div className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-2 flex-1 min-w-[140px]">
                                                                         <LinkIcon className="w-4 h-4 text-gray-500" />
                                                                         <select value={p.partnerId || ""} onChange={(e) => updateParticipant(p.id, 'partnerId', e.target.value)} className="modern-input !py-2 !text-sm bg-transparent !border-0 focus:!ring-0 cursor-pointer">
-                                                                            <option value="">짝꿍 없음</option>
+                                                                            <option value="">계획된 짝 없음</option>
                                                                             {participants.filter(u => u.id !== p.id).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                                                                         </select>
                                                                     </div>
