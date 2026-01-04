@@ -456,6 +456,31 @@
                             if (!currentAssignments[targetLocIdx].members.some(m => m.id === user.id)) {
                                 currentAssignments[targetLocIdx].members.push(user);
                             }
+
+                            // [New Logic] 짝꿍 가용성 교차 검증 (Intersection Check)
+                            if (user.partnerId) {
+                                const partner = participants.find(p => p.id === parseInt(user.partnerId));
+                                if (partner) {
+                                    // 짝꿍도 이 시간에 가능한가?
+                                    // - partner가 default time이면 config 시간 따름
+                                    // - partner가 fixed time이면 partner.availTime 따름
+                                    let partnerStart = timeToMinutes(config.startTime);
+                                    let partnerEnd = getEndTimeMinutes(config.endTime);
+
+                                    if (!partner.useDefaultTime) {
+                                        partnerStart = timeToMinutes(partner.availStart);
+                                        partnerEnd = getEndTimeMinutes(partner.availEnd);
+                                    }
+
+                                    // 둘 다 가능한 시간일 때만 짝꿍도 함께 배치
+                                    if (currentSlotMinutes >= partnerStart && nextSlotMinutes <= partnerEnd) {
+                                        // 중복 방지 체크 후 추가
+                                        if (!currentAssignments[targetLocIdx].members.some(m => m.id === partner.id)) {
+                                            currentAssignments[targetLocIdx].members.push(partner);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     });
 
@@ -472,6 +497,8 @@
                         // 균등 배분(Merge ON)일 때는 조금 넘쳐도 허용
                         const limit = config.mergeRemainder ? parseInt(config.peoplePerShift) + 1 : parseInt(config.peoplePerShift);
                         
+                        // [New Rule Added] 설정한 인원/조와 상관없이 배치되는 오류 수정
+                        // 이미 고정 인원(Step 0)에 의해 자리가 찼다면 건너뜀
                         if (currentAssignments[i].members.length >= limit) continue;
 
                         let attempts = 0;
@@ -500,7 +527,7 @@
 
                             if (validMembers.length > 0 && validMembers.length === candidateTeam.length) {
                                 // 남은 자리에 들어갈 수 있는지 체크
-                                if (currentAssignments[i].members.length + validMembers.length <= limit + 1) { // 유연하게 +1
+                                if (currentAssignments[i].members.length + validMembers.length <= limit) { 
                                     currentAssignments[i].members.push(...validMembers);
                                     break; 
                                 } else {
@@ -513,6 +540,38 @@
                                 }
                             }
                         }
+                    }
+
+                    // [New] 1.5 Priority Pairing (우선 순위 짝짓기)
+                    // - 1순위: 1인 팀 합류 (혼자 근무하는 것 방지)
+                    // - 2순위: 빈 장소가 아닌 곳에 합류 (빈 장소 최소화)
+                    // - 3순위: 팀 흡수 (Overfill)
+                    
+                    const MAX_LIMIT = parseInt(config.peoplePerShift);
+
+                    while (floaters.length > 0) {
+                        const person = floaters[0];
+                        let matched = false;
+
+                        // 1순위: 1인 팀 찾기 (짝을 맞춰주기 위함)
+                        const loneWolfGroup = currentAssignments.find(g => g.members.length === 1);
+                        if (loneWolfGroup) {
+                            loneWolfGroup.members.push(person);
+                            floaters.shift();
+                            continue;
+                        }
+
+                        // 2순위: 정원 미달인 팀 찾기 (빈 장소가 아닌 곳)
+                        const roomWithSpace = currentAssignments.find(g => g.members.length > 0 && g.members.length < MAX_LIMIT);
+                        if (roomWithSpace) {
+                            roomWithSpace.members.push(person);
+                            floaters.shift();
+                            continue;
+                        }
+
+                        // 3순위: 아예 비어있는 곳 (새로운 팀 결성) - 기존 로직 Step 2에서 처리
+                        // 여기서는 일단 패스하고 Floaters로 남겨둠
+                        break; 
                     }
 
                     // 2. Floater 재조합
@@ -541,8 +600,17 @@
                         } 
                         else if (activeGroups.length > 0) {
                              activeGroups.sort((a, b) => a.members.length - b.members.length);
-                             // 정량 배정(Merge OFF)이면 꽉 찬 방에는 넣지 않음 (단, 다른 대안이 없으면 넣음)
-                             if (!config.mergeRemainder && activeGroups[0].members.length >= parseInt(config.peoplePerShift)) {
+                             
+                             // [Updated Filter Logic]
+                             // 균등 배분(Merge ON)이거나, 대상이 여성(F)인 경우 => 무조건 흡수 (빈 방 생성 X)
+                             const forceAbsorb = config.mergeRemainder || person.gender === 'F';
+
+                             if (forceAbsorb) {
+                                // 무조건 기존 팀 중 가장 적은 곳으로 (과밀 허용)
+                                target = activeGroups[0];
+                             }
+                             else if (!config.mergeRemainder && activeGroups[0].members.length >= parseInt(config.peoplePerShift)) {
+                                 // 정량 배정이고 꽉 찼으면 -> 새 방으로 (단, 남성일 때만)
                                  if (emptyGroups.length > 0 && person.gender === 'M') {
                                      target = emptyGroups[0];
                                  } else {
@@ -552,12 +620,18 @@
                                  target = activeGroups[0];
                              }
                         } 
-                        else if (emptyGroups.length > 0 && person.gender === 'M') {
-                            target = emptyGroups[0];
+                        else if (emptyGroups.length > 0) {
+                             // 활성화된 그룹이 없는데 빈 방이 있는 경우 (첫 배정 등)
+                             // 여성이면 혼자 들어갈 수 없으므로 일단 넣되, 추후 Safety Check에서 처리됨
+                             target = emptyGroups[0];
                         }
 
                         if (target) {
                             target.members.push(person);
+                        } else {
+                            // 갈 곳이 없는 경우 (방도 없고 팀도 없음 - 예외 케이스)
+                            // 버려질 수 없으므로 임의 배정
+                            if (activeGroups.length > 0) activeGroups[0].members.push(person);
                         }
                     }
 
@@ -602,6 +676,26 @@
                             }
                         }
                     }
+
+                    // [New Step 5.5] Final Safety Check (여성 1인 근무 절대 방어 & 고립 방지)
+                    // 위 모든 로직을 거쳤음에도 여성 혼자 남은 경우 -> 무조건 다른 방으로 강제 이동
+                    currentAssignments.forEach(assignment => {
+                        if (assignment.members.length === 1 && assignment.members[0].gender === 'F') {
+                            const female = assignment.members.pop();
+                            
+                            // 인원이 가장 많은 방을 찾아서 보냄 (안전함 우선)
+                            const bestGroup = currentAssignments
+                                .filter(g => g !== assignment && g.members.length > 0)
+                                .sort((a, b) => b.members.length - a.members.length)[0];
+                                
+                            if (bestGroup) {
+                                bestGroup.members.push(female);
+                            } else {
+                                // 다른 방도 다 비어있다면? (극단적 케이스) -> 도로 넣을 수 밖에 없음
+                                assignment.members.push(female);
+                            }
+                        }
+                    });
                     
                     currentAssignments.forEach(ass => {
                         ass.members.forEach(m => assignedPersonIds.add(m.id));
@@ -707,6 +801,17 @@
                 }
             };
 
+            // [New] 안전한 전체 삭제 핸들러 추가
+            const handleSafeRemoveAll = (e) => {
+                e.preventDefault();
+                // 브라우저 기본 동작 방지 및 이벤트 전파 중단
+                e.stopPropagation();
+                
+                if (window.confirm(`${genderTab === 'M' ? '남성' : '여성'} 목록을 정말 모두 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) {
+                    setParticipants(prev => prev.filter(p => p.gender !== genderTab));
+                }
+            };
+
             const updateParticipant = (id, field, value) => {
                 setParticipants(participants.map(p => {
                     if (p.id === id) return { ...p, [field]: value };
@@ -752,6 +857,8 @@
             }, [isSetupOpen, shuffleCount, rotationStep]);
 
             const filteredParticipants = participants.filter(p => p.gender === genderTab);
+            const maleCount = participants.filter(p => p.gender === 'M').length;
+            const femaleCount = participants.filter(p => p.gender === 'F').length;
 
             const maxWidthClass = locations.length <= 1 ? "max-w-3xl" : "max-w-6xl";
 
@@ -771,9 +878,11 @@
                                 <button onClick={() => setIsSetupOpen(true)} className="modern-btn bg-white border border-gray-300 text-gray-700 hover:bg-gray-50">
                                     <Settings className="w-5 h-5 mr-2" /> 설정
                                 </button>
+                                {/* 핵심 기능: 순서 섞기 유지 */}
                                 <button onClick={() => setRotationStep(prev => prev + 1)} className="modern-btn bg-indigo-50 border border-indigo-100 text-indigo-700 hover:bg-indigo-100">
                                     <Rotate className="w-5 h-5 mr-2" /> 순서 섞기
                                 </button>
+                                {/* 핵심 기능: 짝 섞기 유지 */}
                                 <button onClick={() => setShuffleCount(prev => prev + 1)} className="modern-btn bg-purple-50 border border-purple-100 text-purple-700 hover:bg-purple-100">
                                     <Shuffle className="w-5 h-5 mr-2" /> 짝 섞기
                                 </button>
@@ -1011,8 +1120,8 @@
                                     {activeTab === 'participants' && (
                                         <div className="flex flex-col h-full max-w-4xl mx-auto">
                                             <div className="flex gap-3 mb-6">
-                                                <button onClick={() => setGenderTab('M')} className={`flex-1 py-4 rounded-xl text-lg font-bold transition flex items-center justify-center gap-2 border-2 ${genderTab === 'M' ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'}`}>남성 목록</button>
-                                                <button onClick={() => setGenderTab('F')} className={`flex-1 py-4 rounded-xl text-lg font-bold transition flex items-center justify-center gap-2 border-2 ${genderTab === 'F' ? 'bg-pink-600 text-white border-pink-600 shadow-md' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'}`}>여성 목록</button>
+                                                <button onClick={() => setGenderTab('M')} className={`flex-1 py-4 rounded-xl text-lg font-bold transition flex items-center justify-center gap-2 border-2 ${genderTab === 'M' ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'}`}>남성 목록 ({maleCount}명)</button>
+                                                <button onClick={() => setGenderTab('F')} className={`flex-1 py-4 rounded-xl text-lg font-bold transition flex items-center justify-center gap-2 border-2 ${genderTab === 'F' ? 'bg-pink-600 text-white border-pink-600 shadow-md' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'}`}>여성 목록 ({femaleCount}명)</button>
                                             </div>
                                             
                                             <div className="flex gap-2 relative mb-6">
@@ -1020,11 +1129,7 @@
                                                     <input type="text" value={newNameInput} onChange={(e) => setNewNameInput(e.target.value)} onKeyDown={handleAddParticipant} placeholder="새로운 참여자 이름 입력" className="modern-input pl-5 pr-24 py-4 text-lg shadow-sm border-gray-300" />
                                                     <button onClick={() => handleAddParticipant({ key: 'Enter', preventDefault: () => {} })} className="absolute right-2 top-2 bottom-2 px-6 bg-gray-900 text-white rounded-lg text-base font-bold hover:bg-black transition">추가</button>
                                                 </div>
-                                                {/* [Updated] 전체 삭제 버튼 - 텍스트 및 클릭 영역 보장 */}
-                                                <button type="button" onClick={removeAllParticipants} className="px-6 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition flex items-center justify-center gap-2 border border-red-100 font-bold">
-                                                    <TrashAll className="w-5 h-5" />
-                                                    <span>전체 삭제</span>
-                                                </button>
+                                                {/* 전체 삭제 버튼 제거됨 */}
                                             </div>
 
                                             {/* Improved List View for Scalability */}
