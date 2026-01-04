@@ -264,18 +264,19 @@
                 phone: '',
             });
 
-            const [locations, setLocations] = useState(['정문']);
+            const [locations, setLocations] = useState(['장소1']);
 
             const [participants, setParticipants] = useState([
-                { id: 1, name: '김철수', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 2, name: '이영희', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 3, name: '박민수', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 4, name: '최지우', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 5, name: '정우성', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 6, name: '한지민', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 7, name: '오지호', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 8, name: '신민아', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
-                { id: 9, name: '강동원', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 1, name: '모세', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 2, name: '사라', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 3, name: '요셉', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 4, name: '리브가', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 5, name: '다윗', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 6, name: '한나', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 7, name: '다니엘', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 8, name: '에스더', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 9, name: '바울', gender: 'M', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
+                { id: 10, name: '룻', gender: 'F', availStart: '10:00', availEnd: '12:00', useDefaultTime: true, partnerId: null, preferredLocation: '' },
             ]);
 
             const [schedule, setSchedule] = useState({});
@@ -963,7 +964,7 @@
                                 </div>
                                 <div className="modern-card p-5 text-center bg-indigo-50 border-indigo-100">
                                     <p className="text-sm font-bold text-indigo-400 uppercase tracking-wide mb-1">방식</p>
-                                    <p className="text-lg font-bold text-indigo-700">{config.mergeRemainder ? "균등 배분" : "정량 배정"}</p>
+                                    <p className="text-lg font-bold text-indigo-700">{config.mergeRemainder ? "균등 배정" : "정량 배정"}</p>
                                     <p className="text-sm text-indigo-500 font-medium">{config.genderRule === 'mixed' ? '혼성' : '분리'}</p>
                                 </div>
                             </div>
@@ -972,13 +973,13 @@
                             <div className="modern-card bg-gray-900 text-white p-5 flex flex-col sm:flex-row justify-between items-center shadow-xl shadow-gray-300">
                                 <div className="flex items-center gap-3 mb-2 sm:mb-0">
                                     <div className="bg-white/10 p-2 rounded-lg"><Clock className="w-5 h-5 text-indigo-300" /></div>
-                                    <span className="font-bold text-lg">운영 시간</span>
+                                    <span className="font-bold text-lg">전시대 봉사 시간</span>
                                 </div>
                                 <div className="flex flex-col sm:flex-row items-center gap-4 text-center sm:text-right">
                                     <div className="text-2xl font-mono font-bold tracking-widest text-indigo-200">{config.startTime} ~ {config.endTime}</div>
                                     {manager.name && (
                                         <div className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-lg border border-white/10">
-                                            <span className="text-xs text-indigo-300 font-semibold uppercase tracking-wider">담당자</span>
+                                            <span className="text-xs text-indigo-300 font-semibold uppercase tracking-wider">인도자</span>
                                             <span className="text-base font-bold">{manager.name}</span>
                                         </div>
                                     )}
@@ -1090,11 +1091,11 @@
                                         <div className="space-y-8 max-w-3xl mx-auto">
                                             {/* 섹션 1 */}
                                             <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
-                                                <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><Phone className="w-5 h-5 text-gray-400"/> 담당자 정보</h3>
+                                                <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><Phone className="w-5 h-5 text-gray-400"/> 인도자 정보</h3>
                                                 <div className="grid md:grid-cols-2 gap-5">
                                                     <div>
                                                         <label className="block text-sm font-bold text-gray-700 mb-1.5">이름</label>
-                                                        <input type="text" value={manager.name} onChange={(e) => setManager({...manager, name: e.target.value})} placeholder="담당자 성함" className="modern-input" />
+                                                        <input type="text" value={manager.name} onChange={(e) => setManager({...manager, name: e.target.value})} placeholder=인도자 성함" className="modern-input" />
                                                     </div>
                                                     <div>
                                                         <label className="block text-sm font-bold text-gray-700 mb-1.5">연락처</label>
@@ -1123,13 +1124,13 @@
                                                         <p className="text-base font-bold text-gray-900 mb-2">자투리 인원 처리</p>
                                                         <div className="flex bg-gray-100 p-1 rounded-lg">
                                                             <label className={`flex-1 text-center py-2 text-sm font-bold rounded-md cursor-pointer transition ${config.mergeRemainder ? 'bg-white shadow-sm text-indigo-600 ring-1 ring-black/5' : 'text-gray-500'}`}>
-                                                                <input type="radio" name="mergeRemainder" checked={config.mergeRemainder} onChange={() => setConfig({...config, mergeRemainder: true})} className="hidden" /> 균등 배분
+                                                                <input type="radio" name="mergeRemainder" checked={config.mergeRemainder} onChange={() => setConfig({...config, mergeRemainder: true})} className="hidden" /> 균등 배정
                                                             </label>
                                                             <label className={`flex-1 text-center py-2 text-sm font-bold rounded-md cursor-pointer transition ${!config.mergeRemainder ? 'bg-white shadow-sm text-indigo-600 ring-1 ring-black/5' : 'text-gray-500'}`}>
                                                                 <input type="radio" name="mergeRemainder" checked={!config.mergeRemainder} onChange={() => setConfig({...config, mergeRemainder: false})} className="hidden" /> 정량 배정
                                                             </label>
                                                         </div>
-                                                        <p className="text-xs text-gray-500 mt-2 text-center">균등: 남은 인원을 골고루 나눔 / 정량: 1명이라도 별도 조 생성</p>
+                                                        <p className="text-xs text-gray-500 mt-2 text-center">균등: 남은 인원을 골고루 나눔 / 정량: 1명이라도 별도 팀 생성</p>
                                                     </div>
 
                                                     <div className="flex-1 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
