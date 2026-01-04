@@ -453,7 +453,14 @@
                             }
                             
                             // 무조건 배치 (인원 제한 무시 - Fixed Time Priority)
-                            if (!currentAssignments[targetLocIdx].members.some(m => m.id === user.id)) {
+                            // [Updated] 이미 해당 위치에 배정되었는지 중복 체크를 강화합니다.
+                            // currentAssignments 전체를 확인하여 이미 배치된 인원은 건너뜁니다.
+                            let isAlreadyAssigned = false;
+                            currentAssignments.forEach(ass => {
+                                if (ass.members.some(m => m.id === user.id)) isAlreadyAssigned = true;
+                            });
+
+                            if (!isAlreadyAssigned) {
                                 currentAssignments[targetLocIdx].members.push(user);
                             }
 
@@ -462,8 +469,6 @@
                                 const partner = participants.find(p => p.id === parseInt(user.partnerId));
                                 if (partner) {
                                     // 짝꿍도 이 시간에 가능한가?
-                                    // - partner가 default time이면 config 시간 따름
-                                    // - partner가 fixed time이면 partner.availTime 따름
                                     let partnerStart = timeToMinutes(config.startTime);
                                     let partnerEnd = getEndTimeMinutes(config.endTime);
 
@@ -474,8 +479,13 @@
 
                                     // 둘 다 가능한 시간일 때만 짝꿍도 함께 배치
                                     if (currentSlotMinutes >= partnerStart && nextSlotMinutes <= partnerEnd) {
-                                        // 중복 방지 체크 후 추가
-                                        if (!currentAssignments[targetLocIdx].members.some(m => m.id === partner.id)) {
+                                        // 중복 방지 체크 후 추가 (짝꿍이 다른 고정 시간 로직에 의해 이미 들어갔을 수 있음)
+                                        let isPartnerAlreadyAssigned = false;
+                                        currentAssignments.forEach(ass => {
+                                            if (ass.members.some(m => m.id === partner.id)) isPartnerAlreadyAssigned = true;
+                                        });
+
+                                        if (!isPartnerAlreadyAssigned) {
                                             currentAssignments[targetLocIdx].members.push(partner);
                                         }
                                     }
@@ -679,6 +689,7 @@
 
                     // [New Step 5.5] Final Safety Check (여성 1인 근무 절대 방어 & 고립 방지)
                     // 위 모든 로직을 거쳤음에도 여성 혼자 남은 경우 -> 무조건 다른 방으로 강제 이동
+                    // 만약 이동할 다른 방이 전혀 없다면 (전체 인원이 1명뿐인 경우 등) -> 해당 시간 배정에서 제외 (Safety First)
                     currentAssignments.forEach(assignment => {
                         if (assignment.members.length === 1 && assignment.members[0].gender === 'F') {
                             const female = assignment.members.pop();
@@ -691,8 +702,11 @@
                             if (bestGroup) {
                                 bestGroup.members.push(female);
                             } else {
-                                // 다른 방도 다 비어있다면? (극단적 케이스) -> 도로 넣을 수 밖에 없음
-                                assignment.members.push(female);
+                                // 다른 방도 다 비어있다면? (전체 인원이 1명뿐인 경우)
+                                // "절대 여자가 배치되어서는 안돼" 규칙에 따라 과감히 배정 취소 (휴식 처리)
+                                // 만약 배정하려면 남성 1인 팀이어야 하는데, 여성이므로 불가.
+                                // floaters에 다시 넣지 않고 증발시킴 (Safety Drop)
+                                console.warn(`[Safety Check] ${female.name} removed from ${time} slot to prevent lone female assignment.`);
                             }
                         }
                     });
@@ -712,7 +726,8 @@
                 const missing = participants.filter(p => !assignedPersonIds.has(p.id));
                 if (missing.length > 0) {
                     let suggestion = `현재 장소와 시간으로는 ${participants.length}명을 모두 수용하기 어렵습니다.\n`;
-                    suggestion += `💡 제안: 근무 장소를 늘리거나, 타임당 인원을 늘려보세요.`;
+                    suggestion += `💡 제안: 근무 장소를 늘리거나, 타임당 인원을 늘려보세요.\n`;
+                    suggestion += `⚠️ 여성 1인 단독 근무 불가 원칙에 의해 배정에서 제외된 경우에도 이 알림이 뜹니다.`;
                     
                     setAlertData({ 
                         isOpen: true, 
@@ -1139,6 +1154,7 @@
 
                                     {activeTab === 'participants' && (
                                         <div className="flex flex-col h-full max-w-4xl mx-auto">
+                                            {/* [Updated] 버튼에 인원수 표시 */}
                                             <div className="flex gap-3 mb-6">
                                                 <button onClick={() => setGenderTab('M')} className={`flex-1 py-4 rounded-xl text-lg font-bold transition flex items-center justify-center gap-2 border-2 ${genderTab === 'M' ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'}`}>남성 목록 ({maleCount}명)</button>
                                                 <button onClick={() => setGenderTab('F')} className={`flex-1 py-4 rounded-xl text-lg font-bold transition flex items-center justify-center gap-2 border-2 ${genderTab === 'F' ? 'bg-pink-600 text-white border-pink-600 shadow-md' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'}`}>여성 목록 ({femaleCount}명)</button>
@@ -1149,11 +1165,7 @@
                                                     <input type="text" value={newNameInput} onChange={(e) => setNewNameInput(e.target.value)} onKeyDown={handleAddParticipant} placeholder="새로운 참여자 이름 입력" className="modern-input pl-5 pr-24 py-4 text-lg shadow-sm border-gray-300" />
                                                     <button onClick={() => handleAddParticipant({ key: 'Enter', preventDefault: () => {} })} className="absolute right-2 top-2 bottom-2 px-6 bg-gray-900 text-white rounded-lg text-base font-bold hover:bg-black transition">추가</button>
                                                 </div>
-                                                {/* [Updated] 안전한 전체 삭제 핸들러 사용 */}
-                                                <button type="button" onClick={handleSafeRemoveAll} className="px-6 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition flex items-center justify-center gap-2 border border-red-100 font-bold">
-                                                    <TrashAll className="w-5 h-5" />
-                                                    <span>전체 삭제</span>
-                                                </button>
+                                                {/* 전체 삭제 버튼 제거됨 */}
                                             </div>
 
                                             {/* Improved List View for Scalability */}
