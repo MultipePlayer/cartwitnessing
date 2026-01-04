@@ -1,0 +1,915 @@
+import React, { useState, useEffect } from 'react';
+import { Settings, MapPin, Clock, Phone, Shuffle, Users, Plus, Trash2, Save, X, CheckCircle2, Circle, AlertCircle, Link as LinkIcon, Share2, Copy, Calculator } from 'lucide-react';
+
+// --- 유틸리티 함수 ---
+
+// "HH:MM" 문자열을 분 단위 정수로 변환
+const timeToMinutes = (time) => {
+  if (!time) return 0;
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+};
+
+// 분 단위 정수를 "HH:MM" 문자열로 변환
+const minutesToTime = (minutes) => {
+  let h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  // 24시 넘어가도 표기 가능하게 (예: 25:00) 혹은 24시간제 유지
+  // 여기서는 단순하게 처리
+  if (h >= 24) h = h % 24; 
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+};
+
+// 시간대 배열 생성
+const generateTimeSlots = (start, end, interval) => {
+  const slots = [];
+  let current = timeToMinutes(start);
+  const endTime = timeToMinutes(end);
+
+  while (current < endTime) {
+    slots.push(minutesToTime(current));
+    current += parseInt(interval);
+  }
+  return slots;
+};
+
+// 메인 컴포넌트
+export default function ShiftScheduler() {
+  // --- 상태 관리 ---
+  
+  // 1. 설정
+  const [config, setConfig] = useState({
+    startTime: '09:00',
+    endTime: '18:00',
+    interval: 15, 
+    peoplePerShift: 2,
+    locationCount: 1, 
+    mergeRemainder: true, 
+    genderRule: 'mixed', 
+  });
+
+  // 2. 관리자 정보
+  const [manager, setManager] = useState({
+    name: '',
+    phone: '',
+  });
+
+  // 3. 장소 목록
+  const [locations, setLocations] = useState(['정문']);
+
+  // 4. 참여자 목록 (duration 필드는 UI 편의용으로만 계산, 실제 저장은 Start/End)
+  const [participants, setParticipants] = useState([
+    { id: 1, name: '김철수', gender: 'M', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null },
+    { id: 2, name: '이영희', gender: 'F', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null },
+    { id: 3, name: '박민수', gender: 'M', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null },
+    { id: 4, name: '최지우', gender: 'F', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null },
+    { id: 5, name: '정우성', gender: 'M', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null },
+    { id: 6, name: '한지민', gender: 'F', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null },
+    { id: 7, name: '오지호', gender: 'M', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null },
+    { id: 8, name: '신민아', gender: 'F', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null },
+    { id: 9, name: '강동원', gender: 'M', availStart: '09:00', availEnd: '18:00', useDefaultTime: true, partnerId: null },
+  ]);
+
+  // 5. 생성된 스케줄 데이터
+  const [schedule, setSchedule] = useState({});
+
+  // 6. UI 상태
+  const [isSetupOpen, setIsSetupOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState('basic'); 
+  const [genderTab, setGenderTab] = useState('M'); 
+  const [newNameInput, setNewNameInput] = useState(''); 
+  
+  // [State] 로테이션 오프셋
+  const [rotationStep, setRotationStep] = useState(0);
+
+  // --- 로직 함수 ---
+
+  // 참여자 전처리
+  const preprocessParticipants = (originalList, rule) => {
+    let processed = [...originalList];
+
+    // 짝꿍 처리
+    const pairedIds = new Set();
+    const orderedList = [];
+
+    processed.forEach(p => {
+      if (pairedIds.has(p.id)) return; 
+
+      orderedList.push(p);
+      pairedIds.add(p.id);
+
+      if (p.partnerId) {
+        const partner = processed.find(u => u.id === parseInt(p.partnerId));
+        if (partner && !pairedIds.has(partner.id)) {
+          orderedList.push(partner);
+          pairedIds.add(partner.id);
+        }
+      }
+    });
+    processed = orderedList;
+
+    // 성별 분리 규칙 (정렬 우선)
+    if (rule === 'separate') {
+        const males = processed.filter(p => p.gender === 'M');
+        const females = processed.filter(p => p.gender === 'F');
+        processed = [...males, ...females];
+    }
+
+    return processed;
+  };
+
+  // [Modified Function] 팀(조) 생성 로직 (성별 분리 강화)
+  const createTeams = (people, size, merge, genderRule) => {
+    const teams = [];
+    if (people.length === 0) return [];
+    
+    // 기존 slice 방식 -> 순회 방식으로 변경하여 성별 경계 체크
+    let currentTeam = [];
+    
+    for (let i = 0; i < people.length; i++) {
+        const person = people[i];
+        
+        // 팀이 꽉 찼으면 완료 처리
+        if (currentTeam.length === size) {
+            teams.push(currentTeam);
+            currentTeam = [];
+        }
+
+        // [Strict Separation Logic] 성별 분리 규칙 적용
+        if (genderRule === 'separate' && currentTeam.length > 0) {
+            const firstMember = currentTeam[0];
+            
+            // 짝꿍 관계인지 확인 (짝꿍이면 성별 달라도 허용)
+            const isPartner = (firstMember.partnerId && parseInt(firstMember.partnerId) === person.id) || 
+                              (person.partnerId && parseInt(person.partnerId) === firstMember.id);
+            
+            // 짝꿍이 아닌데 성별이 다르면? -> 현재 팀 마감하고 분리
+            if (firstMember.gender !== person.gender && !isPartner) {
+                teams.push(currentTeam);
+                currentTeam = [];
+            }
+        }
+
+        currentTeam.push(person);
+    }
+
+    // 마지막 남은 팀 처리 및 병합 로직
+    if (currentTeam.length > 0) {
+        if (merge && currentTeam.length < size && teams.length > 0) {
+            const lastTeam = teams[teams.length - 1];
+            
+            // 병합 시에도 성별 규칙 체크
+            let canMerge = true;
+            if (genderRule === 'separate') {
+                const lastTeamRep = lastTeam[0];
+                const currentTeamRep = currentTeam[0];
+                if (lastTeamRep.gender !== currentTeamRep.gender) {
+                    canMerge = false;
+                }
+            }
+
+            if (canMerge) {
+                 teams[teams.length - 1] = [...lastTeam, ...currentTeam];
+            } else {
+                 teams.push(currentTeam);
+            }
+        } else {
+            teams.push(currentTeam);
+        }
+    }
+    
+    return teams;
+  };
+
+  // 자동 배정 알고리즘
+  const generateSchedule = () => {
+    const timeSlots = generateTimeSlots(config.startTime, config.endTime, config.interval);
+    const newSchedule = {};
+    
+    // 1. 전처리 단계
+    const processedPeople = preprocessParticipants(participants, config.genderRule);
+
+    // 2. 조(Team) 편성 (genderRule 인자 전달 추가)
+    let teams = createTeams(processedPeople, parseInt(config.peoplePerShift), config.mergeRemainder, config.genderRule);
+    
+    if (teams.length === 0) {
+      setSchedule({});
+      return;
+    }
+
+    // 로테이션 적용
+    if (rotationStep > 0) {
+        const rotateCount = rotationStep % teams.length;
+        teams = [...teams.slice(rotateCount), ...teams.slice(0, rotateCount)];
+    }
+
+    // 3. 순차 배정
+    let teamIndex = 0; 
+
+    timeSlots.forEach((time) => {
+      newSchedule[time] = {};
+      const currentSlotMinutes = timeToMinutes(time);
+      const nextSlotMinutes = currentSlotMinutes + parseInt(config.interval);
+
+      locations.forEach((loc) => {
+        newSchedule[time][loc] = [];
+        
+        let attempts = 0;
+        let assignedMembers = [];
+        
+        while (attempts < teams.length) {
+            const candidateTeam = teams[teamIndex % teams.length];
+            
+            const availableMembers = candidateTeam.filter(p => {
+                const pStartStr = p.useDefaultTime ? config.startTime : p.availStart;
+                const pEndStr = p.useDefaultTime ? config.endTime : p.availEnd;
+                const pStart = timeToMinutes(pStartStr);
+                const pEnd = timeToMinutes(pEndStr);
+                if (isNaN(pStart) || isNaN(pEnd)) return false;
+                return currentSlotMinutes >= pStart && nextSlotMinutes <= pEnd;
+            });
+
+            if (availableMembers.length > 0) {
+                assignedMembers = availableMembers;
+                teamIndex++; 
+                break;
+            } else {
+                teamIndex++; 
+                attempts++;
+            }
+        }
+
+        if (assignedMembers.length > 0) {
+            newSchedule[time][loc] = assignedMembers;
+        } else {
+            newSchedule[time][loc] = [null]; 
+        }
+      });
+    });
+
+    setSchedule(newSchedule);
+  };
+
+  // 카카오톡 공유용 텍스트 복사
+  const copyToClipboard = () => {
+    let text = `[스마트 교대 근무표]\n`;
+    text += `운영 시간: ${config.startTime} ~ ${config.endTime}\n\n`;
+
+    const sortedTimes = Object.keys(schedule).sort();
+    sortedTimes.forEach(time => {
+        text += `⏰ ${time}\n`;
+        locations.forEach(loc => {
+            const members = schedule[time][loc];
+            if (members && members.length > 0) {
+                const names = members.map(m => m ? m.name : "미배정").join(", ");
+                text += `  └ ${loc}: ${names}\n`;
+            }
+        });
+        text += `\n`;
+    });
+
+    text += `\n(생성된 근무표입니다)`;
+
+    navigator.clipboard.writeText(text).then(() => {
+        alert("근무표가 복사되었습니다!\n카카오톡 채팅방에 '붙여넣기' 하세요.");
+    }).catch(err => {
+        console.error("복사 실패:", err);
+        alert("복사하기 기능을 지원하지 않는 브라우저입니다.");
+    });
+  };
+
+  const handleConfigChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setConfig(prev => ({ 
+        ...prev, 
+        [name]: type === 'checkbox' ? checked : value 
+    }));
+  };
+
+  const updateLocations = (count) => {
+    const newCount = Math.min(5, Math.max(1, count));
+    setConfig(prev => ({ ...prev, locationCount: newCount }));
+    
+    setLocations(prev => {
+      const newLocs = [...prev];
+      if (newCount > prev.length) {
+        for (let i = prev.length; i < newCount; i++) {
+          newLocs.push(`장소 ${i + 1}`);
+        }
+      } else {
+        newLocs.splice(newCount);
+      }
+      return newLocs;
+    });
+  };
+
+  const handleLocationNameChange = (idx, val) => {
+    const newLocs = [...locations];
+    newLocs[idx] = val;
+    setLocations(newLocs);
+  };
+
+  const handleAddParticipant = (e) => {
+    if (e.key === 'Enter' && newNameInput.trim()) {
+      e.preventDefault();
+      const newId = participants.length > 0 ? Math.max(...participants.map(p => p.id)) + 1 : 1;
+      setParticipants([...participants, { 
+        id: newId, 
+        name: newNameInput.trim(), 
+        gender: genderTab, 
+        availStart: config.startTime, 
+        availEnd: config.endTime,
+        useDefaultTime: true,
+        partnerId: null 
+      }]);
+      setNewNameInput('');
+    }
+  };
+
+  const removeParticipant = (id) => {
+    setParticipants(participants.map(p => 
+        p.partnerId == id ? { ...p, partnerId: null } : p
+    ).filter(p => p.id !== id));
+  };
+
+  const updateParticipant = (id, field, value) => {
+    setParticipants(participants.map(p => {
+        if (p.id === id) {
+            return { ...p, [field]: value };
+        }
+        if (field === 'partnerId' && p.id === parseInt(value)) {
+             return { ...p, partnerId: id };
+        }
+        return p;
+    }));
+  };
+
+  // [Function] 근무 시간(분) 변경 시 종료 시간 자동 계산 핸들러
+  const handleDurationChange = (id, minutesStr) => {
+    const minutes = parseInt(minutesStr);
+    if (isNaN(minutes)) return;
+
+    setParticipants(participants.map(p => {
+        if (p.id === id) {
+            const startMins = timeToMinutes(p.availStart);
+            const newEndMins = startMins + minutes;
+            const newEnd = minutesToTime(newEndMins);
+            return { ...p, availEnd: newEnd, useDefaultTime: false }; // 수동 변경이므로 useDefaultTime 해제
+        }
+        return p;
+    }));
+  };
+
+  const toggleTimeSettings = (id) => {
+    setParticipants(participants.map(p => {
+        if (p.id === id) {
+            const newUseDefault = !p.useDefaultTime;
+            return { 
+                ...p, 
+                useDefaultTime: newUseDefault,
+                availStart: p.availStart, 
+                availEnd: p.availEnd
+            };
+        }
+        return p;
+    }));
+  };
+
+  useEffect(() => {
+    if (!isSetupOpen && participants.length > 0) {
+      generateSchedule();
+    }
+  }, [isSetupOpen, rotationStep]);
+
+
+  const filteredParticipants = participants.filter(p => p.gender === genderTab);
+
+  return (
+    <div className="min-h-screen bg-gray-50 text-gray-800 font-sans">
+      
+      {/* 헤더 */}
+      <header className="bg-white shadow-md sticky top-0 z-10 border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+          <div className="flex items-center gap-2">
+            <div className="bg-indigo-600 p-2 rounded-lg">
+              <Clock className="w-6 h-6 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">스마트 교대 근무표</h1>
+          </div>
+          
+          {manager.name && (
+            <a href={`tel:${manager.phone}`} className="flex items-center gap-3 bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100 hover:bg-indigo-100 transition cursor-pointer group">
+              <div className="flex flex-col items-end">
+                <span className="text-xs text-indigo-500 font-semibold">담당자 (Manager)</span>
+                <span className="font-bold text-indigo-900 group-hover:text-indigo-700">{manager.name}</span>
+              </div>
+              <div className="bg-indigo-600 rounded-full p-2 text-white">
+                <Phone className="w-4 h-4" />
+              </div>
+            </a>
+          )}
+          
+          <div className="flex gap-2">
+            <button 
+              onClick={() => setIsSetupOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-sm font-medium transition"
+            >
+              <Settings className="w-4 h-4" /> 설정 수정
+            </button>
+            
+            <button 
+              onClick={() => setRotationStep(prev => prev + 1)}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+            >
+              <Shuffle className="w-4 h-4" /> 순서 변경
+            </button>
+
+            <button 
+              onClick={copyToClipboard}
+              className="flex items-center gap-2 px-4 py-2 bg-yellow-400 hover:bg-yellow-500 text-yellow-900 rounded-lg text-sm font-bold shadow-sm transition"
+              title="카카오톡 공유용 텍스트 복사"
+            >
+              <Share2 className="w-4 h-4" /> 공유
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* 메인 콘텐츠 */}
+      <main className="max-w-7xl mx-auto px-4 py-8">
+        
+        {/* 통계 요약 */}
+        <div className="mb-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <p className="text-gray-500 text-xs">총 참여 인원</p>
+            <p className="text-2xl font-bold text-gray-800">{participants.length}명</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <p className="text-gray-500 text-xs">근무 장소</p>
+            <p className="text-2xl font-bold text-gray-800">{locations.length}곳</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <p className="text-gray-500 text-xs">교대 간격</p>
+            <p className="text-2xl font-bold text-gray-800">{config.interval}분</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+             <p className="text-gray-500 text-xs">운영 방식</p>
+             <div className="flex flex-col">
+                <span className="text-sm font-bold text-indigo-600">
+                  {config.mergeRemainder ? "나머지 합치기" : "정량 배정"}
+                </span>
+                <span className="text-xs text-gray-400">
+                  {config.genderRule === 'mixed' ? '남녀 혼성' : '남녀 분리(엄격)'}
+                </span>
+             </div>
+          </div>
+        </div>
+
+        {/* 시간 표시 헤더 */}
+        <div className="bg-indigo-900 text-white rounded-t-xl p-4 flex justify-between items-center shadow-md">
+            <div className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-indigo-300" />
+                <span className="font-bold text-lg">전체 근무 시간</span>
+            </div>
+            <div className="text-xl font-mono font-bold tracking-wider">
+                {config.startTime} ~ {config.endTime}
+            </div>
+        </div>
+
+        {/* 스케줄 테이블 */}
+        <div className="bg-white rounded-b-xl shadow-lg border border-gray-200 overflow-hidden border-t-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  <th className="p-4 font-semibold text-gray-600 w-32 sticky left-0 bg-gray-50 z-10">시간</th>
+                  {locations.map((loc, idx) => (
+                    <th key={idx} className="p-4 font-semibold text-gray-600 min-w-[200px]">
+                      <div className="flex items-center gap-2">
+                        <MapPin className="w-4 h-4 text-indigo-500" />
+                        {loc}
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {Object.keys(schedule).sort().map((time, timeIdx) => (
+                  <tr key={time} className="hover:bg-gray-50/50 transition">
+                    <td className="p-4 font-mono font-medium text-indigo-900 sticky left-0 bg-white border-r border-gray-100 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.05)]">
+                      {time}
+                    </td>
+                    {locations.map((loc, locIdx) => (
+                      <td key={`${time}-${loc}`} className="p-3 align-top">
+                        <div className="flex flex-wrap gap-2">
+                          {schedule[time]?.[loc]?.map((person, pIdx) => (
+                            person ? (
+                              <div 
+                                key={pIdx} 
+                                className={`
+                                  flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border shadow-sm
+                                  ${person.gender === 'M' 
+                                    ? 'bg-blue-50 text-blue-700 border-blue-100' 
+                                    : 'bg-pink-50 text-pink-700 border-pink-100'}
+                                `}
+                              >
+                                <span className={`w-2 h-2 rounded-full ${person.gender === 'M' ? 'bg-blue-400' : 'bg-pink-400'}`}></span>
+                                {person.name}
+                              </div>
+                            ) : (
+                              <div key={pIdx} className="flex items-center gap-2 px-3 py-1.5 rounded-full text-sm text-red-500 border border-dashed border-red-200 bg-red-50">
+                                <AlertCircle className="w-3 h-3"/> 배정 불가(시간)
+                              </div>
+                            )
+                          ))}
+                          {(!schedule[time]?.[loc] || schedule[time][loc].length === 0) && (
+                              <span className="text-gray-300 text-sm">-</span>
+                          )}
+                        </div>
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                {Object.keys(schedule).length === 0 && (
+                  <tr>
+                    <td colSpan={locations.length + 1} className="p-12 text-center text-gray-400">
+                      설정을 완료하고 스케줄을 생성해주세요.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+
+      {/* --- 설정 팝업 (Modal) --- */}
+      {isSetupOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl flex flex-col max-h-[90vh]">
+            
+            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">근무 환경 설정</h2>
+                <p className="text-sm text-gray-500">참여자 순서에 맞춰 반복해서 자동으로 배정됩니다.</p>
+              </div>
+              <button onClick={() => setIsSetupOpen(false)} className="p-2 hover:bg-gray-200 rounded-full text-gray-500">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex border-b border-gray-200">
+              <button 
+                onClick={() => setActiveTab('basic')}
+                className={`flex-1 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'basic' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                1. 기본 & 장소 설정
+              </button>
+              <button 
+                onClick={() => setActiveTab('participants')}
+                className={`flex-1 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'participants' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                2. 참여자 관리 ({participants.length}명)
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 bg-white">
+              {activeTab === 'basic' && (
+                <div className="space-y-8">
+                  <section>
+                    <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-4">담당자 정보</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">담당자 이름</label>
+                        <input 
+                          type="text" 
+                          value={manager.name} 
+                          onChange={(e) => setManager({...manager, name: e.target.value})}
+                          placeholder="홍길동"
+                          className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">연락처</label>
+                        <input 
+                          type="tel" 
+                          value={manager.phone} 
+                          onChange={(e) => setManager({...manager, phone: e.target.value})}
+                          placeholder="010-1234-5678"
+                          className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none" 
+                        />
+                      </div>
+                    </div>
+                  </section>
+
+                  <hr className="border-gray-100" />
+
+                  <section>
+                    <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-4">시간 및 교대 규칙</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">시작 시간</label>
+                        <input 
+                          type="time" 
+                          name="startTime" 
+                          value={config.startTime} 
+                          onChange={handleConfigChange}
+                          className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">종료 시간</label>
+                        <input 
+                          type="time" 
+                          name="endTime" 
+                          value={config.endTime} 
+                          onChange={handleConfigChange}
+                          className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">교대 시간(분)</label>
+                        <select 
+                          name="interval" 
+                          value={config.interval} 
+                          onChange={handleConfigChange}
+                          className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:border-indigo-500"
+                        >
+                          <option value="5">5분</option>
+                          <option value="10">10분</option>
+                          <option value="15">15분</option>
+                          <option value="20">20분</option>
+                          <option value="25">25분</option>
+                          <option value="30">30분</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">타임당 인원</label>
+                        <input 
+                          type="number" 
+                          name="peoplePerShift" 
+                          min="1" max="10"
+                          value={config.peoplePerShift} 
+                          onChange={handleConfigChange}
+                          className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                    </div>
+                    
+                    {/* 옵션 그룹 */}
+                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* 1. 자투리 인원 처리 */}
+                        <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-100">
+                             <div className="flex items-start gap-3">
+                                 <div className="flex items-center h-5">
+                                     <input
+                                         id="mergeRemainder"
+                                         name="mergeRemainder"
+                                         type="checkbox"
+                                         checked={config.mergeRemainder}
+                                         onChange={handleConfigChange}
+                                         className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                                     />
+                                 </div>
+                                 <div className="text-sm">
+                                     <label htmlFor="mergeRemainder" className="font-medium text-gray-900">
+                                         자투리 인원을 마지막 조에 합치기
+                                     </label>
+                                     <p className="text-gray-500 mt-1">
+                                         체크 시: 남은 인원이 별도 조가 되지 않고 마지막 조에 합류합니다.
+                                     </p>
+                                 </div>
+                             </div>
+                        </div>
+
+                        {/* 2. 남녀 근무 방식 (Enhanced) */}
+                         <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
+                             <div className="text-sm">
+                                 <label className="font-medium text-gray-900 block mb-2">
+                                     남녀 근무 방식 설정
+                                 </label>
+                                 <div className="flex gap-4">
+                                     <label className="flex items-center gap-2 cursor-pointer">
+                                         <input 
+                                            type="radio" 
+                                            name="genderRule" 
+                                            value="mixed"
+                                            checked={config.genderRule === 'mixed'}
+                                            onChange={handleConfigChange}
+                                            className="text-indigo-600 focus:ring-indigo-500"
+                                         />
+                                         <span>혼성 근무</span>
+                                     </label>
+                                     <label className="flex items-center gap-2 cursor-pointer">
+                                         <input 
+                                            type="radio" 
+                                            name="genderRule" 
+                                            value="separate"
+                                            checked={config.genderRule === 'separate'}
+                                            onChange={handleConfigChange}
+                                            className="text-indigo-600 focus:ring-indigo-500"
+                                         />
+                                         <span>남녀 분리 (엄격)</span>
+                                     </label>
+                                 </div>
+                                 <p className="text-gray-500 mt-1">
+                                     분리 시 짝꿍을 제외하곤 남녀가 절대 섞이지 않도록 팀을 나눕니다.
+                                 </p>
+                             </div>
+                        </div>
+                    </div>
+                  </section>
+
+                  <hr className="border-gray-100" />
+
+                  <section>
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">장소 설정 (1~5곳)</h3>
+                      <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-lg">
+                        <button 
+                          onClick={() => updateLocations(config.locationCount - 1)}
+                          className="w-8 h-8 flex items-center justify-center rounded-md bg-white shadow-sm text-gray-600 hover:text-indigo-600"
+                        >-</button>
+                        <span className="w-8 text-center font-bold">{config.locationCount}</span>
+                        <button 
+                          onClick={() => updateLocations(config.locationCount + 1)}
+                          className="w-8 h-8 flex items-center justify-center rounded-md bg-white shadow-sm text-gray-600 hover:text-indigo-600"
+                        >+</button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {locations.map((loc, idx) => (
+                        <div key={idx} className="flex items-center gap-2">
+                          <span className="text-gray-400 text-sm w-12">장소 {idx + 1}</span>
+                          <input 
+                            type="text" 
+                            value={loc} 
+                            onChange={(e) => handleLocationNameChange(idx, e.target.value)}
+                            className="flex-1 border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 outline-none"
+                            placeholder="예: 정문, 후문, 로비"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {activeTab === 'participants' && (
+                <div className="flex flex-col h-full">
+                  <div className="flex gap-2 mb-4 p-1 bg-gray-100 rounded-lg w-fit">
+                    <button
+                      onClick={() => setGenderTab('M')}
+                      className={`px-4 py-2 rounded-md text-sm font-bold transition flex items-center gap-2 ${genderTab === 'M' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      남성 (Male)
+                    </button>
+                    <button
+                      onClick={() => setGenderTab('F')}
+                      className={`px-4 py-2 rounded-md text-sm font-bold transition flex items-center gap-2 ${genderTab === 'F' ? 'bg-white text-pink-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      여성 (Female)
+                    </button>
+                  </div>
+
+                  <div className="mb-4">
+                    <div className="flex gap-2">
+                      <input 
+                        type="text"
+                        value={newNameInput}
+                        onChange={(e) => setNewNameInput(e.target.value)}
+                        onKeyDown={handleAddParticipant}
+                        placeholder={`이름을 입력하고 엔터를 누르면 ${genderTab === 'M' ? '남성' : '여성'} 목록에 추가됩니다.`}
+                        className="flex-1 border border-indigo-200 rounded-lg px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm"
+                      />
+                      <button 
+                        onClick={() => handleAddParticipant({ key: 'Enter', preventDefault: () => {} })}
+                        className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 font-medium whitespace-nowrap"
+                      >
+                        추가
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto border border-gray-200 rounded-xl bg-gray-50">
+                    {filteredParticipants.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-gray-400 p-8">
+                        <Users className="w-12 h-12 mb-2 opacity-20" />
+                        <p>등록된 {genderTab === 'M' ? '남성' : '여성'} 참여자가 없습니다.</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-gray-100">
+                        {filteredParticipants.map((p) => (
+                          <div key={p.id} className="bg-white p-4 flex flex-col xl:flex-row items-start xl:items-center gap-4 hover:bg-gray-50 transition">
+                            <div className="flex items-center gap-3 flex-1 w-full xl:w-auto">
+                              <span className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0 ${p.gender === 'M' ? 'bg-blue-400' : 'bg-pink-400'}`}>
+                                {p.gender}
+                              </span>
+                              <input 
+                                type="text" 
+                                value={p.name} 
+                                onChange={(e) => updateParticipant(p.id, 'name', e.target.value)}
+                                className="font-medium text-gray-900 border-none bg-transparent focus:ring-0 p-0 hover:underline cursor-text w-24 sm:w-32"
+                              />
+                              
+                              <div className="flex items-center gap-2 text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                                <LinkIcon className="w-3 h-3" />
+                                <select 
+                                    value={p.partnerId || ""} 
+                                    onChange={(e) => updateParticipant(p.id, 'partnerId', e.target.value)}
+                                    className="bg-transparent border-none p-0 text-sm w-20 sm:w-24 focus:ring-0 cursor-pointer"
+                                >
+                                    <option value="">짝꿍 없음</option>
+                                    {participants.filter(u => u.id !== p.id).map(u => (
+                                        <option key={u.id} value={u.id}>{u.name} ({u.gender})</option>
+                                    ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 sm:gap-4 w-full xl:w-auto justify-between xl:justify-start">
+                              <label className="flex items-center gap-2 cursor-pointer select-none">
+                                <button 
+                                  onClick={() => toggleTimeSettings(p.id)}
+                                  className={`transition ${p.useDefaultTime ? 'text-gray-300' : 'text-indigo-600'}`}
+                                >
+                                  {p.useDefaultTime ? <Circle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+                                </button>
+                                <span className="text-sm text-gray-500 whitespace-nowrap">개별 시간</span>
+                              </label>
+
+                              <div className={`flex items-center gap-1 transition-all duration-200 ${p.useDefaultTime ? 'opacity-30 grayscale pointer-events-none' : 'opacity-100 pointer-events-auto'}`}>
+                                {/* [Modified UI] 시작 시간 */}
+                                <input 
+                                  type="time" 
+                                  value={p.availStart} 
+                                  onChange={(e) => updateParticipant(p.id, 'availStart', e.target.value)}
+                                  className="border border-gray-200 rounded px-2 py-1 text-sm text-gray-600 w-24"
+                                />
+                                <span className="text-gray-400">+</span>
+                                
+                                {/* [New UI] 시간 선택 드롭다운 (숫자 입력 대체) */}
+                                <select 
+                                    onChange={(e) => handleDurationChange(p.id, e.target.value)}
+                                    className="border border-indigo-200 bg-indigo-50 rounded px-2 py-1 text-sm text-indigo-700 w-24 focus:ring-1 focus:ring-indigo-500 outline-none cursor-pointer"
+                                    defaultValue=""
+                                >
+                                    <option value="" disabled>시간 선택</option>
+                                    <option value="60">1시간</option>
+                                    <option value="90">1.5시간</option>
+                                    <option value="120">2시간</option>
+                                    <option value="150">2.5시간</option>
+                                    <option value="180">3시간</option>
+                                    <option value="240">4시간</option>
+                                </select>
+
+                                <span className="text-gray-400">→</span>
+
+                                {/* 종료 시간 (자동 계산되거나 수동 입력) */}
+                                <input 
+                                  type="time" 
+                                  value={p.availEnd} 
+                                  onChange={(e) => updateParticipant(p.id, 'availEnd', e.target.value)}
+                                  className="border border-gray-200 rounded px-2 py-1 text-sm text-gray-600 w-24"
+                                />
+                              </div>
+
+                              <button 
+                                onClick={() => removeParticipant(p.id)}
+                                className="text-gray-300 hover:text-red-500 p-1"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl flex justify-end gap-3">
+              <button 
+                onClick={() => setIsSetupOpen(false)}
+                className="px-5 py-2.5 text-gray-600 font-medium hover:bg-gray-200 rounded-lg transition"
+              >
+                닫기
+              </button>
+              <button 
+                onClick={() => {
+                  generateSchedule();
+                  setIsSetupOpen(false);
+                }}
+                className="px-6 py-2.5 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition flex items-center gap-2"
+              >
+                <Save className="w-4 h-4" /> 설정 저장 및 스케줄 생성
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
